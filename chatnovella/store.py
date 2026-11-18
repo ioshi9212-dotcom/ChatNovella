@@ -33,6 +33,21 @@ SESSION_ID = re.compile(r"^CN_[a-f0-9]{32}$")
 CHUNK_SIZE = 36_000  # Unicode characters; transport reports its unit
 MAX_INPUT_FILE = 2_000_000
 
+# Общие инструкции приложения: не копируются в файлы отдельных сессий.
+# Отправляются в начале КАЖДОГО игрового пакета, до состояния и анкет НПС.
+ENGINE_CONTEXT_FILES = (
+    "rules/technical.md",
+    "runtimes/director.md",
+    "runtimes/npc.md",
+    "runtimes/pov.md",
+    "runtimes/knowledge.md",
+    "runtimes/relations.md",
+    "runtimes/arcs.md",
+    "runtimes/continuity.md",
+    "runtimes/boundaries.md",
+    "skin/skin_builder.md",
+)
+
 
 class StateError(ValueError):
     """Invalid state change, missing resource or stale version."""
@@ -101,7 +116,15 @@ def _validate_all(changes: dict[str, str]) -> None:
 
 
 class SessionStore:
-    def __init__(self, data_root: str | Path, templates_root: str | Path):
+    def __init__(
+        self, data_root: str | Path, templates_root: str | Path,
+        engine_root: str | Path | None = None,
+    ):
+        self.engine_root = (
+            Path(engine_root).resolve()
+            if engine_root is not None
+            else Path(__file__).resolve().parents[1]
+        )
         self.data_root = Path(data_root).resolve()
         self.sessions = self.data_root / "sessions"
         self.packets = self.data_root / "packets"
@@ -394,12 +417,22 @@ class SessionStore:
                 if name not in seen:
                     names.append(name)
                     seen.add(name)
+        # Каждый ход читаем актуальные общие правила ИМЕННО с диска Amvera.
+        # Это не состояние новеллы, поэтому их нельзя редактировать через
+        # save_setup_files/save_novella_turn и нет смысла копировать в /data.
         parts = []
+        for path in ENGINE_CONTEXT_FILES:
+            file = self.engine_root / path
+            if not file.is_file():
+                raise StateError(f"Отсутствует обязательная инструкция движка: {path}")
+            parts.append((path, file.read_text(encoding="utf-8")))
         for path in names:
             file = rev / path
             if file.is_file():
                 parts.append((path, file.read_text(encoding="utf-8")))
-        return self._packet(session_id, meta["version"], parts)
+        packet = self._packet(session_id, meta["version"], parts)
+        packet["engine_files"] = list(ENGINE_CONTEXT_FILES)
+        return packet
 
     def prepare_audit(self, session_id: str, kind: int) -> dict[str, Any]:
         if kind not in (15, 60):
