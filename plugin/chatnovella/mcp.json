@@ -1,0 +1,12 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "chatnovella": {
+      "type": "streamable-http",
+      "url": "https://chatnovella-yumikofv.waw0.amvera.tech/mcp",
+      "extensions": {
+        "com.openai": {"auth": {"type": "none"}}
+      }
+    }
+  }
+}

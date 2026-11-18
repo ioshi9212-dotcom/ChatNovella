@@ -1,0 +1,20 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "chatnovella",
+  "version": "0.1.0",
+  "description": "Интерактивные новеллы с постоянным состоянием и загрузкой модулей из Amvera.",
+  "author": {"name": "ioshi9212-dotcom"},
+  "repository": "https://github.com/ioshi9212-dotcom/ChatNovella",
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "ChatNovella",
+        "shortDescription": "Интерактивные новеллы",
+        "longDescription": "Создание и продолжение интерактивных новелл. Оригинал, состояние, история и анкеты хранятся в Amvera; Rules, Skin Builder и режиссёрские модули загружаются перед каждой сценой.",
+        "developerName": "ioshi9212-dotcom",
+        "capabilities": [],
+        "defaultPrompt": "Начнём новую новеллу в ChatNovella."
+      }
+    }
+  }
+}
