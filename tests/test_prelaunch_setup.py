@@ -2,6 +2,8 @@
 import json
 import tempfile
 import unittest
+
+from review_helpers import reviewed_commit
 from pathlib import Path
 
 from chatnovella.store import CHAR_FILES, STATE_FILES, SessionStore, StateError
@@ -110,11 +112,13 @@ class TestPrelaunchSetup(unittest.TestCase):
         packet = self.store.prepare_turn(self.sid, [{"id": "NPC_001", "mode": "physical"}])
         for i in range(packet["count"]):
             self.store.read_chunk(packet["packet_id"], i)
-        played = self.store.commit_turn(
+        played = reviewed_commit(self.store,
             self.sid, ready["version"], "Запускай первую сцену", "Первая сцена",
             {"state/scene.md": "Сцена началась"}, timeline_events=[],
             timeline_no_change_reason="Вступление без значимых событий",
             packet_id=packet["packet_id"],
+            relationship_labels={"NPC_001": "Персонаж"},
+            relationships="Персонаж — интерес 50/0",
         )
         with self.assertRaisesRegex(StateError, "после первого"):
             self.store.update_setup(self.sid, played["version"], {self.ability: "Подмена"})

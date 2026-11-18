@@ -48,8 +48,9 @@ Amvera не проверены: вход был отклонён.
 - `chatnovella/store.py` — хранение сессий, пакеты, версии, журнал и аудиты.
 - `chatnovella/mcp_server.py` — MCP-инструменты с необязательной Bearer-авторизацией.
 - `templates/session/` и `templates/character/` — простые анкеты и состояния.
-- `engine/` — все семь общих инструкций **рядом**: `rules.md` (техника, знания, отношения, арки), `director.md`, `npc_rules.md`, `world_rules.md`, `strict_prohibitions.md`, `pov_autonomy.md`, `skin_builder.md` (оформление).
+- `engine/` — все восемь общих инструкций **рядом**: `rules.md` (техника, знания, отношения, арки), `director.md`, `npc_rules.md`, `world_rules.md`, `strict_prohibitions.md`, `pov_autonomy.md`, `skin_builder.md` (оформление), `scene_review.md` (проверка перед записью, максимум две правки).
 - При **каждом** вызове `prepare_novella_turn` Amvera загружает все файлы `engine/` **перед** состоянием сессии, без копирования в `/data`. Большие пакеты передаются чанками по 36 000 символов.
+- Перед сохранением `review_novella_scene` проверяет полный черновик и восемь конкретных результатов смысловой сверки GPT. Сервер проверяет структуру Skin Builder, числа против карточек и максимум две правки. `save_novella_turn` принимает только одобренный `review_id` с тем же текстом, файлами и хронологией. Отклонённая проверка не добавляет ход и не меняет состояние игры.
 - `tests/` — локальные тесты.
 - `amvera.yaml` — конфигурация запуска на Amvera.
 

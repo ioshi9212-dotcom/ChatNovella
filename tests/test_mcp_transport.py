@@ -6,6 +6,7 @@ import unittest
 from unittest.mock import patch
 
 from starlette.testclient import TestClient
+from review_helpers import checks, scene
 
 
 class TestMCPTransport(unittest.TestCase):
@@ -40,10 +41,10 @@ class TestMCPTransport(unittest.TestCase):
             response = self.post(client, "tools/list")
             self.assertEqual(response.status_code, 200, response.text)
             tools = {tool["name"] for tool in response.json()["result"]["tools"]}
-            self.assertEqual(len(tools), 14)
+            self.assertEqual(len(tools), 15)
             self.assertTrue({"prepare_novella_turn", "read_novella_chunk",
                              "save_novella_turn", "repair_novella_timeline",
-                             "initialize_novella_relationship_metrics"} <= tools)
+                             "initialize_novella_relationship_metrics", "review_novella_scene"} <= tools)
             response = self.post(client, "tools/call", {
                 "name": "list_novella_sessions", "arguments": {},
             })
@@ -54,6 +55,32 @@ class TestMCPTransport(unittest.TestCase):
         with TestClient(self.server.app, base_url="https://untrusted.example") as client:
             response = self.post(client, "initialize")
             self.assertEqual(response.status_code, 421)
+
+    def test_http_review_and_exact_approved_save(self):
+        meta = self.server.store.create_session("Тестовый оригинал", "Канон", "Рината")
+        meta = self.server.store.activate(meta["session_id"], meta["version"], True)
+        with TestClient(self.server.app, base_url=f"https://{self.server.PUBLIC_HOST}") as client:
+            def call(name, arguments):
+                response = self.post(client, "tools/call", {"name": name, "arguments": arguments})
+                self.assertEqual(response.status_code, 200, response.text)
+                result = response.json()["result"]
+                self.assertFalse(result.get("isError", False), result)
+                return result["structuredContent"]
+
+            packet = call("prepare_novella_turn", {"session_id": meta["session_id"], "participants": []})
+            self.assertIn("engine/scene_review.md", packet["engine_files"])
+            for index in range(packet["count"]):
+                call("read_novella_chunk", {"packet_id": packet["packet_id"], "index": index})
+            payload = {
+                "session_id": meta["session_id"], "expected_version": meta["version"],
+                "packet_id": packet["packet_id"], "reader_text": "(Оглядеться)",
+                "narration": scene(), "files": {"state/scene.md": "Рината осмотрела зал."},
+                "timeline_events": [], "timeline_no_change_reason": "Нет новых значимых сюжетных фактов",
+            }
+            reviewed = call("review_novella_scene", {**payload, "checks": checks(), "relationship_labels": {}})
+            self.assertTrue(reviewed["approved"], reviewed)
+            saved = call("save_novella_turn", {**payload, "review_id": reviewed["review_id"]})
+            self.assertEqual(saved["turn"], 1)
 
     def test_chatgpt_origin_allowed_unknown_origin_rejected(self):
         with TestClient(self.server.app, base_url=f"https://{self.server.PUBLIC_HOST}:443") as client:

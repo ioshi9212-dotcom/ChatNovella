@@ -118,7 +118,7 @@ def finish_setup(session_id: str, expected_version: int,
 def prepare_novella_turn(
     session_id: str, participants: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Read all seven engine/ instructions every turn, then session files.
+    """Read all eight engine/ instructions every turn, then session files.
 
     Static engine files always come first and are loaded fresh from the
     deployed Amvera app; they are never duplicated into session state.
@@ -129,8 +129,8 @@ def prepare_novella_turn(
     observer: personality, abilities, knowledge, relations;
     message/mentioned: no card. need_past=true optionally for phone/observer.
     Always fetch ALL chunks before writing narrative.
-    Before saving, privately apply the six-point review in engine/rules.md,
-    including strict Skin Builder formatting. Fix draft mistakes first.
+    Then apply engine/scene_review.md and call review_novella_scene.
+    One initial draft plus at most two corrected submissions, no endless loop.
     """
     return store.prepare_turn(session_id, participants)
 
@@ -142,16 +142,49 @@ def read_novella_chunk(packet_id: str, index: int) -> dict[str, Any]:
 
 
 @mcp.tool()
+def review_novella_scene(
+    session_id: str, expected_version: int, reader_text: str,
+    narration: str, files: dict[str, str], timeline_events: list[str],
+    packet_id: str, checks: dict[str, dict[str, str]],
+    relationship_labels: dict[str, str], timeline_no_change_reason: str = "",
+) -> dict[str, Any]:
+    """Review the complete UNPUBLISHED draft before save; does not add a turn.
+
+    Read engine/scene_review.md. checks has exactly eight keys: canon, pov,
+    npc, continuity, direction, knowledge, skin, persistence. Each value is
+    {"status":"pass" or "fail", "evidence":"concrete result, 12–350 chars"}.
+    Check actual text against all loaded rules/cards; report flaws honestly.
+    This is the model's semantic assessment, not a separate literary judge.
+
+    relationship_labels maps each physical/phone/observer NPC ID to the exact
+    visible name/description in its separate footer line. {} when none.
+    Server checks header, 3x3 options, footer and exact saved relation numbers.
+    Pass exact intended save arguments, including files and chronology.
+
+    Initial draft is correction_pass=0, then at most TWO corrected submissions.
+    Fix all issues together. Same-request network retry is free; a new packet
+    does not reset the budget. If blocked, stop and state remaining issues.
+    Do not invent/alter reader_text to reset the limit. No flawed scene is saved.
+    approved=true returns review_id for save_novella_turn with identical inputs.
+    """
+    return store.review_scene(
+        session_id, expected_version, reader_text, narration, files,
+        timeline_events, packet_id, checks, relationship_labels,
+        timeline_no_change_reason,
+    )
+
+
+@mcp.tool()
 def save_novella_turn(
     session_id: str, expected_version: int, reader_text: str,
     narration: str, files: dict[str, str], timeline_events: list[str],
-    packet_id: str, timeline_no_change_reason: str = "",
+    packet_id: str, review_id: str, timeline_no_change_reason: str = "",
 ) -> dict[str, Any]:
-    """Save the corrected scene after EVERY chunk and a private six-point review.
+    """Save ONLY the exact approved draft after review_novella_scene.
 
-    BEFORE calling, apply the short review in engine/rules.md to the actual
-    draft. Follow engine modules strictly; fix Skin Builder, POV, canon and
-    continuity mistakes. Publish the saved text unchanged, without a checklist.
+    review_id must come from approved=true. Narration, reader_text, files,
+    chronology and packet_id must match that review exactly; changing any of
+    them invalidates approval. Publish the saved text unchanged, no checklist.
 
     packet_id is returned by prepare_novella_turn. Read ALL chunks using
     read_novella_chunk before save; server verifies receipts and version.
@@ -170,6 +203,7 @@ def save_novella_turn(
         timeline_events=timeline_events,
         timeline_no_change_reason=timeline_no_change_reason,
         packet_id=packet_id,
+        review_id=review_id,
     )
 
 

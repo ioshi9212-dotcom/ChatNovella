@@ -1,6 +1,8 @@
 """Chronology must never be silently skipped; backfill preserves saved gameplay."""
 import tempfile
 import unittest
+
+from review_helpers import reviewed_commit
 from pathlib import Path
 
 from chatnovella.store import SessionStore, StateError, _append_timeline
@@ -47,7 +49,7 @@ class TestTimelineIntegrity(unittest.TestCase):
         return packet["packet_id"]
 
     def save(self, scene="Сцена", events=None, reason="Это обычная реплика без сюжетного события"):
-        self.meta = self.store.commit_turn(
+        self.meta = reviewed_commit(self.store,
             self.sid, self.meta["version"], "Реплика читателя", scene,
             {"state/scene.md": scene},
             timeline_events=events, timeline_no_change_reason=reason if events is None or not events else "",

@@ -1,6 +1,8 @@
 """Numeric relationship memory must exist, persist and be recoverable safely."""
 import tempfile
 import unittest
+
+from review_helpers import reviewed_commit
 from pathlib import Path
 
 from chatnovella.store import (
@@ -47,15 +49,15 @@ class TestRelationshipMetrics(unittest.TestCase):
                 self.store._root(self.sid), self.meta, {}, status="ready"
             )
 
-    def save(self, relation=None):
+    def save(self, relation=None, reader="Действие"):
         packet = self.store.prepare_turn(self.sid, [])
         for i in range(packet["count"]):
             self.store.read_chunk(packet["packet_id"], i)
         files = {"state/scene.md": "Сцена после хода"}
         if relation is not None:
             files[self.path] = relation
-        return self.store.commit_turn(
-            self.sid, self.meta["version"], "Действие", "Ответ сцены", files,
+        return reviewed_commit(self.store,
+            self.sid, self.meta["version"], reader, "Ответ сцены", files,
             timeline_events=[], timeline_no_change_reason="Обычный разговор без новых событий",
             packet_id=packet["packet_id"],
         )
@@ -89,7 +91,7 @@ class TestRelationshipMetrics(unittest.TestCase):
             "- интерес 52/+1\n- доверие 30/+0",
         ):
             with self.subTest(body=body), self.assertRaises(StateError):
-                self.save(body)
+                self.save(body, reader="Новый тестовый ввод: " + body)
             self.assertEqual(self.store.read_state(self.sid), before)
         self.meta = self.save("- интерес 52/+2\n- доверие 30/+0")
         self.assertEqual(self.meta["turn"], 1)

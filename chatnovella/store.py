@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import contextlib
 import fcntl
+import hashlib
 from datetime import datetime
 import json
 import os
@@ -16,6 +17,8 @@ import shutil
 import tempfile
 from pathlib import Path
 from typing import Any, Iterator
+
+from chatnovella.scene_review import MAX_CORRECTIONS, REVIEW_CHECKS, inspect_scene
 
 STATE_FILES = (
     "state/scene.md", "state/locations.md", "state/roster.md",
@@ -48,6 +51,7 @@ ENGINE_CONTEXT_FILES = (
     "engine/strict_prohibitions.md",
     "engine/pov_autonomy.md",
     "engine/skin_builder.md",
+    "engine/scene_review.md",
 )
 
 
@@ -125,6 +129,63 @@ def _validate_all(changes: dict[str, str]) -> None:
         _validate_relation(content, path)
         if path == "state/items.md":
             _validate_items(content)
+
+
+def _validate_relation_updates(current: Path, files: dict[str, str]) -> None:
+    for name, text in files.items():
+        if not name.endswith("/relations.md"):
+            continue
+        old_file = current / name
+        old = _relation_stats(old_file.read_text(encoding="utf-8"), name) if old_file.is_file() else {}
+        new = _relation_stats(text, name, required=True)
+        if set(old) - set(new):
+            raise StateError(f"Нельзя удалять сохранённые показатели отношений: {name}")
+        for label in old.keys() & new.keys():
+            value, delta = new[label]
+            if value != old[label][0] + delta:
+                raise StateError(f"Значение и дельта не согласованы с прошлым ходом: {name}: {label}")
+
+
+def _turn_payload(
+    reader_text: str, narration: str, files: dict[str, str],
+    timeline_events: list[str] | None, timeline_no_change_reason: str,
+    packet_id: str | None,
+) -> dict[str, Any]:
+    """Canonical save payload; a receipt cannot authorize different text/state."""
+    return {
+        "reader_text": reader_text, "narration": narration, "files": files,
+        "timeline_events": timeline_events,
+        "timeline_no_change_reason": timeline_no_change_reason,
+        "packet_id": packet_id,
+    }
+
+
+def _digest(value: Any) -> str:
+    return hashlib.sha256(json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")).hexdigest()
+
+
+def _validate_turn_payload(payload: dict[str, Any]) -> list[tuple[str, str]]:
+    if (not isinstance(payload["reader_text"], str)
+            or not isinstance(payload["narration"], str)
+            or not payload["narration"].strip()
+            or len(payload["reader_text"]) > MAX_INPUT_FILE
+            or len(payload["narration"]) > MAX_INPUT_FILE):
+        raise StateError("Нужны полные сообщения читателя и писателя допустимого размера")
+    files = payload["files"]
+    if not isinstance(files, dict) or not isinstance(files.get("state/scene.md"), str) or not files["state/scene.md"].strip():
+        raise StateError("Состояние сцены обязательно на каждом игровом ходу")
+    if "state/timeline.md" in files:
+        raise StateError("Хронология обновляется автоматически из timeline_events; не передавайте state/timeline.md в files")
+    parsed = _parse_timeline_events(payload["timeline_events"])
+    reason = payload["timeline_no_change_reason"]
+    if not parsed and (not isinstance(reason, str) or len(reason.strip()) < 8):
+        raise StateError("Укажите значимые timeline_events либо объясните, почему хронология за этот ход не изменилась")
+    if parsed and reason:
+        raise StateError("При наличии событий не нужен timeline_no_change_reason")
+    _validate_all(files)
+    return parsed
 
 
 
@@ -295,18 +356,7 @@ class SessionStore:
         _validate_all(files)
         current = self._revision(root, previous["version"])
         if journal_entry is not None:
-            for name, text in files.items():
-                if not name.endswith("/relations.md"):
-                    continue
-                old_file = current / name
-                old = _relation_stats(old_file.read_text(encoding="utf-8"), name) if old_file.is_file() else {}
-                new = _relation_stats(text, name, required=True)
-                if set(old) - set(new):
-                    raise StateError(f"Нельзя удалять сохранённые показатели отношений: {name}")
-                for label in old.keys() & new.keys():
-                    value, delta = new[label]
-                    if value != old[label][0] + delta:
-                        raise StateError(f"Значение и дельта не согласованы с прошлым ходом: {name}: {label}")
+            _validate_relation_updates(current, files)
         new_version = previous["version"] + 1
         final = self._revision(root, new_version)
         if final.exists():
@@ -443,7 +493,7 @@ class SessionStore:
 
     def _require_complete_turn_packet(
         self, session_id: str, version: int, packet_id: str | None,
-    ) -> None:
+    ) -> dict[str, Any]:
         """Called under the session lock, which also serializes read receipts."""
         if not isinstance(packet_id, str) or not re.fullmatch(r"[a-f0-9]{32}", packet_id):
             raise StateError(
@@ -466,6 +516,111 @@ class SessionStore:
             raise StateError(
                 f"Контекст прочитан не полностью: не запрошены чанки {missing}"
             )
+        return packet
+
+    def _review_path(self, root: Path, version: int, reader_text: str) -> Path:
+        # Fetching a new packet cannot reset the correction budget. A new
+        # reader message starts a new cycle; do not invent one to bypass it.
+        return root / "scene_reviews" / f"v{version:08d}" / f"{_digest(reader_text)}.json"
+
+    def review_scene(
+        self, session_id: str, expected_version: int, reader_text: str,
+        narration: str, files: dict[str, str], timeline_events: list[str],
+        packet_id: str, checks: dict[str, Any],
+        relationship_labels: dict[str, str], timeline_no_change_reason: str = "",
+    ) -> dict[str, Any]:
+        """Check one original draft plus at most two revised submissions."""
+        if not isinstance(reader_text, str) or not isinstance(narration, str):
+            raise StateError("Нужен дословный ввод читателя и полный текст сцены")
+        if len(reader_text) > MAX_INPUT_FILE or len(narration) > MAX_INPUT_FILE:
+            raise StateError("Превышен допустимый размер текста")
+        payload = _turn_payload(reader_text, narration, files, timeline_events,
+                                timeline_no_change_reason, packet_id)
+        request_hash = _digest({"payload": payload, "checks": checks,
+                                "relationship_labels": relationship_labels})
+        root = self._root(session_id)
+        with self._locked(root):
+            meta = self._current(root)
+            if meta["version"] != expected_version:
+                raise StateError("Версия устарела; проверяйте сцену по новому состоянию")
+            if meta["status"] not in ("ready", "active") or meta["audit_15_due"] or meta["audit_60_due"]:
+                raise StateError("Сначала завершите настройку или обязательный аудит")
+            packet = self._require_complete_turn_packet(session_id, expected_version, packet_id)
+            if packet.get("review_contract") != 1:
+                raise StateError("Получите новый prepare_novella_turn с engine/scene_review.md и прочитайте все чанки")
+            path = self._review_path(root, expected_version, reader_text)
+            ledger = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {"attempts": []}
+            attempts = ledger["attempts"]
+            if attempts and attempts[-1]["request_hash"] == request_hash:
+                return attempts[-1]["result"]  # Network retries consume no pass.
+            if len(attempts) >= MAX_CORRECTIONS + 1:
+                instruction = (
+                    "Две правки исчерпаны. Можно сохранить только последнюю одобренную версию, без новых изменений."
+                    if attempts[-1]["result"]["approved"] else
+                    "Две правки исчерпаны. Не сохраняйте сцену; сообщите читателю оставшиеся нарушения."
+                )
+                return {
+                    "approved": False, "review_id": None,
+                    "correction_pass": MAX_CORRECTIONS, "corrections_remaining": 0,
+                    "blocked": True,
+                    "issues": [instruction + " Новый пакет не сбрасывает лимит.",
+                               *attempts[-1]["result"]["issues"]],
+                }
+            issues, footer = inspect_scene(narration, checks, relationship_labels)
+            rev = self._revision(root, expected_version)
+            try:
+                _validate_turn_payload(payload)
+                _validate_relation_updates(rev, files)
+            except StateError as exc:
+                issues.append(f"persistence: {exc}")
+            expected_npcs = {p["id"] for p in packet["participants"]
+                             if p["mode"] in ("physical", "phone", "observer")}
+            if not isinstance(relationship_labels, dict) or set(relationship_labels) != expected_npcs:
+                issues.append("skin.relationships: подписи должны включать всех участвующих NPC из пакета (physical/phone/observer), без упомянутых и посторонних")
+            for npc_id in expected_npcs:
+                name = f"characters/{npc_id}/relations.md"
+                try:
+                    if isinstance(files, dict) and name in files:
+                        _safe_change(name, files[name])
+                        expected = _relation_stats(files[name], name, required=True)
+                    else:
+                        before = _relation_stats((rev / name).read_text(encoding="utf-8"), name, required=True)
+                        expected = {key: (value, 0) for key, (value, _) in before.items()}
+                    if footer.get(npc_id) != expected:
+                        issues.append(f"skin.relationships: {npc_id}: нижняя строка должна содержать все сохранённые шкалы с точным итогом и дельтой этого хода")
+                except (StateError, OSError) as exc:
+                    issues.append(f"skin.relationships: {npc_id}: {exc}")
+            correction = len(attempts)
+            result = {
+                "approved": not issues,
+                "review_id": secrets.token_hex(16) if not issues else None,
+                "correction_pass": correction,
+                "corrections_remaining": MAX_CORRECTIONS - correction,
+                "blocked": bool(issues) and correction == MAX_CORRECTIONS,
+                "issues": issues,
+            }
+            attempts.append({
+                "request_hash": request_hash, "payload_hash": _digest(payload),
+                "checks": checks, "relationship_labels": relationship_labels,
+                "result": result,
+            })
+            _atomic_write(path, _json_dumps(ledger))
+            return result
+
+    def _require_scene_review(
+        self, root: Path, version: int, payload: dict[str, Any], review_id: str | None,
+    ) -> dict[str, Any]:
+        if not isinstance(review_id, str) or not re.fullmatch(r"[a-f0-9]{32}", review_id):
+            raise StateError("Перед сохранением вызовите review_novella_scene; нужен одобренный review_id")
+        path = self._review_path(root, version, payload["reader_text"])
+        if not path.is_file():
+            raise StateError("Нет проверки этого хода; вызовите review_novella_scene")
+        review = json.loads(path.read_text(encoding="utf-8"))["attempts"][-1]
+        if (not review["result"]["approved"] or review["result"]["review_id"] != review_id
+                or review["payload_hash"] != _digest(payload)):
+            raise StateError("Проверка не одобрила этот точный текст и изменения; не подменяйте сцену после проверки")
+        return {"review_id": review_id, "correction_pass": review["result"]["correction_pass"],
+                "checks": review["checks"], "relationship_labels": review["relationship_labels"]}
 
     def commit_turn(
         self, session_id: str, expected_version: int, reader_text: str,
@@ -473,29 +628,12 @@ class SessionStore:
         timeline_events: list[str] | None = None,
         timeline_no_change_reason: str = "",
         packet_id: str | None = None,
+        review_id: str | None = None,
     ) -> dict[str, Any]:
-        """Every turn requires explicit timeline review and fully fetched context."""
-        if not isinstance(reader_text, str) or not isinstance(narration, str) or not narration.strip():
-            raise StateError("Нужны полные сообщения читателя и писателя")
-        if not isinstance(files, dict) or "state/scene.md" not in files:
-            raise StateError("Состояние сцены обязательно на каждом игровом ходу")
-        if "state/timeline.md" in files:
-            raise StateError(
-                "Хронология обновляется автоматически из timeline_events; "
-                "не передавайте state/timeline.md в files"
-            )
-        # No implicit fallback: a forgotten chronology check is an error.
-        parsed = _parse_timeline_events(timeline_events)
-        if not parsed:
-            if not isinstance(timeline_no_change_reason, str) or len(
-                timeline_no_change_reason.strip()
-            ) < 8:
-                raise StateError(
-                    "Укажите значимые timeline_events либо объясните, "
-                    "почему хронология за этот ход не изменилась"
-                )
-        elif timeline_no_change_reason:
-            raise StateError("При наличии событий не нужен timeline_no_change_reason")
+        """Save only the exact reviewed scene/state after all current chunks."""
+        payload = _turn_payload(reader_text, narration, files, timeline_events,
+                                timeline_no_change_reason, packet_id)
+        parsed = _validate_turn_payload(payload)
         root = self._root(session_id)
         with self._locked(root):
             prior = self._current(root)
@@ -508,6 +646,7 @@ class SessionStore:
             # It is not possible to prove the model UNDERSTOOD each chunk,
             # but the server can require all of them to have been fetched.
             self._require_complete_turn_packet(session_id, prior["version"], packet_id)
+            review = self._require_scene_review(root, expected_version, payload, review_id)
             next_turn = prior["turn"] + 1
             changes = dict(files)
             if parsed:
@@ -518,6 +657,7 @@ class SessionStore:
                 "turn": next_turn, "reader": reader_text, "narration": narration,
                 "timeline_events": timeline_events,
                 "timeline_no_change_reason": timeline_no_change_reason,
+                "scene_review": review,
             }
             return self._write_revision(
                 root, prior, changes, status="active", turn=next_turn,
@@ -656,6 +796,7 @@ class SessionStore:
     def _packet(
         self, session_id: str, version: int, parts: list[tuple[str, str]],
         purpose: str = "turn",
+        participants: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         full = "".join(
             f"\n===== FILE {path} =====\n{text}\n===== END {path} =====\n"
@@ -670,6 +811,8 @@ class SessionStore:
             "session_id": session_id, "version": version, "chunks": chunks,
             "count": len(chunks), "total_characters": len(full),
             "purpose": purpose, "read_indices": [],
+            "participants": participants or [],
+            "review_contract": 1 if purpose == "turn" else None,
         }
         _atomic_write(self.packets / f"{packet_id}.json", _json_dumps(payload))
         return {
@@ -732,7 +875,7 @@ class SessionStore:
                 if name not in seen:
                     names.append(name)
                     seen.add(name)
-        # Каждый ход читаем 7 общих правил из одной папки engine/ на Amvera.
+        # Каждый ход читаем все инструкции, включая проверку, из engine/.
         # Это не состояние новеллы, поэтому их нельзя редактировать через
         # save_setup_files/save_novella_turn и нет смысла копировать в /data.
         parts = []
@@ -745,14 +888,17 @@ class SessionStore:
             file = rev / path
             if file.is_file():
                 parts.append((path, file.read_text(encoding="utf-8")))
-        packet = self._packet(session_id, meta["version"], parts)
+        packet = self._packet(session_id, meta["version"], parts, participants=participants)
         packet["engine_files"] = list(ENGINE_CONTEXT_FILES)
         packet["pre_save_review"] = (
-            "Строго соблюдайте все файлы engine/. После черновика и до сохранения "
-            "выполните шесть пунктов самопроверки из engine/rules.md, включая "
-            "оформление Skin Builder и автономию POV. Исправьте ошибки, "
-            "сохраните исправленный текст и опубликуйте его без чек-листа."
+            "Примените engine/scene_review.md к готовому черновику и вызовите "
+            "review_novella_scene с восемью конкретными результатами. Исходный "
+            "черновик + максимум две правки; новый пакет не сбрасывает лимит. "
+            "В save_novella_turn передайте одобренный review_id и тот же текст, "
+            "файлы и хронологию. Затем опубликуйте сохранённый текст без отчёта."
         )
+        packet["scene_review"] = {"tool": "review_novella_scene", "checks": list(REVIEW_CHECKS),
+                                  "max_corrections": MAX_CORRECTIONS}
         return packet
 
     def prepare_audit(self, session_id: str, kind: int) -> dict[str, Any]:

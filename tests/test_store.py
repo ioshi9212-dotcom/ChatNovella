@@ -1,6 +1,8 @@
 """Offline tests for ChatNovella state storage, with no Amvera account required."""
 import tempfile
 import unittest
+
+from review_helpers import reviewed_commit
 from pathlib import Path
 
 from chatnovella.store import CHUNK_SIZE, SessionStore, StateError
@@ -115,7 +117,7 @@ class TestStore(unittest.TestCase):
         ]
         self.assertTrue(all(len(c) <= CHUNK_SIZE for c in chunks))
         self.assertIn("Я" * (CHUNK_SIZE * 2 + 15), "".join(chunks))
-        self.store.commit_turn(
+        reviewed_commit(self.store,
             self.id, self.store.read_state(self.id)["version"],
             "Действие", "Текст", {"state/scene.md": "новая поза"},
             timeline_events=[], timeline_no_change_reason="Значимого события нет",
@@ -126,7 +128,7 @@ class TestStore(unittest.TestCase):
 
     def test_commit_previous_state_protected_and_recent(self):
         ready = self.ready()
-        meta = self.store.commit_turn(
+        meta = reviewed_commit(self.store,
             self.id, ready["version"], "Забираю зажигалку",
             "Лиам отдал зажигалку", {
                 "state/scene.md": "Зажигалка у POV",
@@ -139,7 +141,7 @@ class TestStore(unittest.TestCase):
         )
         self.assertEqual(meta["turn"], 1)
         with self.assertRaises(StateError):
-            self.store.commit_turn(
+            reviewed_commit(self.store,
                 self.id, ready["version"], "1", "2",
                 {"state/scene.md": "устаревшая версия"},
                 timeline_events=[], timeline_no_change_reason="Новых фактов нет",
@@ -167,7 +169,7 @@ class TestStore(unittest.TestCase):
     def test_15_60_audits_block_next_turn_until_done(self):
         meta = self.ready()
         for number in range(1, 61):
-            meta = self.store.commit_turn(
+            meta = reviewed_commit(self.store,
                 self.id, meta["version"], f"reader-{number}",
                 f"writer-{number}", {"state/scene.md": f"Сцена {number}"},
                 timeline_events=[], timeline_no_change_reason="Никаких значимых изменений",

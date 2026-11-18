@@ -2,6 +2,8 @@
 import json
 import tempfile
 import unittest
+
+from review_helpers import reviewed_commit
 from pathlib import Path
 
 from chatnovella.store import CHUNK_SIZE, SessionStore, StateError
@@ -32,7 +34,7 @@ class TestContextReceipt(unittest.TestCase):
         self.temp.cleanup()
 
     def commit(self, packet_id=None):
-        return self.store.commit_turn(
+        return reviewed_commit(self.store,
             self.session_id, self.meta["version"], "Действие", "Новая сцена",
             {"state/scene.md": "Новая сцена"}, timeline_events=[],
             timeline_no_change_reason="Не произошло ничего значимого",

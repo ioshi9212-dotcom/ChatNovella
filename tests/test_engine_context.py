@@ -1,6 +1,8 @@
 """Each gameplay packet includes complete, current engine instructions."""
 import tempfile
 import unittest
+
+from review_helpers import reviewed_commit
 from pathlib import Path
 
 from chatnovella.store import (
@@ -48,7 +50,7 @@ class TestEngineContext(unittest.TestCase):
     def test_all_rules_and_skin_before_canon_every_scene(self):
         packet = self.store.prepare_turn(self.sid, [])
         self.assertEqual(packet["engine_files"], list(ENGINE_CONTEXT_FILES))
-        self.assertEqual(len(ENGINE_CONTEXT_FILES), 7)
+        self.assertEqual(len(ENGINE_CONTEXT_FILES), 8)
         self.assertTrue(all(name.startswith("engine/") for name in ENGINE_CONTEXT_FILES))
         full = self.unpack(packet)
         self.assertNotIn("RAW_ORIGINAL", full)
@@ -74,7 +76,7 @@ class TestEngineContext(unittest.TestCase):
         second = self.unpack(second_packet)
         self.assertNotIn("NEW_SKIN_VERSION_2", first)
         self.assertIn("NEW_SKIN_VERSION_2", second)
-        meta = self.store.commit_turn(
+        meta = reviewed_commit(self.store,
             self.sid, self.ready["version"], "Ход читателя",
             "Ответ GPT", {"state/scene.md": "Новая поза"},
             timeline_events=[], timeline_no_change_reason="Это лишь смена позы",
@@ -87,7 +89,7 @@ class TestEngineContext(unittest.TestCase):
 
     def test_no_edit_engine_rules_via_session_state(self):
         with self.assertRaises(StateError):
-            self.store.commit_turn(
+            reviewed_commit(self.store,
                 self.sid, self.ready["version"], "Действие", "Сцена",
                 {"state/scene.md": "Сидит", "engine/skin_builder.md": "Подмена"},
                 timeline_events=[], timeline_no_change_reason="Обычный ход без событий"
