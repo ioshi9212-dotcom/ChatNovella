@@ -28,7 +28,7 @@ MCP-сервер с HTTP-транспортом, постоянным хране
 ```bash
 python -m pip install -r requirements.txt
 python -m unittest discover -s tests -v
- export CHATNOVELLA_DATA_DIR="./local_data"
+export CHATNOVELLA_DATA_DIR="./local_data"
 uvicorn chatnovella.mcp_server:app --port 8080
 ```
 
