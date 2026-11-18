@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import contextlib
 import fcntl
+from datetime import datetime
 import json
 import os
 import re
@@ -32,6 +33,10 @@ CHAR_PATH = re.compile(
 SESSION_ID = re.compile(r"^CN_[a-f0-9]{32}$")
 CHUNK_SIZE = 36_000  # Unicode characters; transport reports its unit
 MAX_INPUT_FILE = 2_000_000
+TIMELINE_FORMAT = re.compile(r"^(\d{2}\.\d{2}\.\d{4})\s*\|\s*(\S[^\n]*)$")
+TIMELINE_HEADER = "# Хронология — строго приватно"
+DATE_HEADING = re.compile(r"^## (\d{2}\.\d{2}\.\d{4})\s*$")
+
 
 # Общие инструкции приложения: не копируются в файлы отдельных сессий.
 # Отправляются в начале КАЖДОГО игрового пакета, до состояния и анкет НПС.
@@ -110,6 +115,84 @@ def _validate_all(changes: dict[str, str]) -> None:
         _validate_relation(content, path)
         if path == "state/items.md":
             _validate_items(content)
+
+
+
+def _parse_timeline_events(events: list[str]) -> list[tuple[str, str]]:
+    """Strict compact wire format: DD.MM.YYYY | a factual event."""
+    if not isinstance(events, list) or len(events) > 30:
+        raise StateError("timeline_events: требуется список из 0–30 событий")
+    parsed: list[tuple[str, str]] = []
+    for raw in events:
+        if not isinstance(raw, str) or len(raw) > 550 or "\n" in raw:
+            raise StateError("Каждое событие хронологии должно быть одной короткой строкой")
+        match = TIMELINE_FORMAT.fullmatch(raw.strip())
+        if match is None:
+            raise StateError("Формат события: ДД.ММ.ГГГГ | краткий факт")
+        date, event = match.groups()
+        try:
+            datetime.strptime(date, "%d.%m.%Y")
+        except ValueError as exc:
+            raise StateError("Неверная календарная дата события") from exc
+        event = event.strip()
+        if len(event) < 8 or event.startswith("["):
+            raise StateError("Нужен конкретный краткий факт, а не пустой шаблон")
+        parsed.append((date, event))
+    if len(parsed) != len(set(parsed)):
+        raise StateError("Одинаковое событие дважды в одном обновлении")
+    return parsed
+
+
+def _append_timeline(previous: str, events: list[tuple[str, str]]) -> str:
+    """Preserve existing prose, append grouped dated facts, avoid exact duplicates."""
+    if not events:
+        return previous
+    has_date = any(DATE_HEADING.fullmatch(line.strip())
+                   for line in previous.splitlines())
+    if "## [ДД.ММ.ГГГГ]" in previous and not has_date:
+        # Drop the untouched original template ONLY if it contains no real
+        # notes. Never erase user-authored events appended under the placeholder.
+        template_lines = {
+            TIMELINE_HEADER,
+            "## [ДД.ММ.ГГГГ]",
+            "- [Только событие, повлиявшее на сюжет, знания, отношения, положение дел или важные предметы.]",
+            "- [Время добавлять, только если оно важно.]",
+            "Факты: что произошло на самом деле, без выдуманных трактовок. Не записывать бытовые действия без последствий. Частные убеждения персонажей — только в их `knowledge.md`. Записи можно уплотнять без удаления фактов и причин.",
+        }
+        if all(not line.strip() or line.strip() in template_lines
+               for line in previous.splitlines()):
+            previous = TIMELINE_HEADER + "\n"
+    lines = (previous.strip() or TIMELINE_HEADER).splitlines()
+    for date, event in events:
+        headings = [
+            (i, found.group(1))
+            for i, line in enumerate(lines)
+            if (found := DATE_HEADING.fullmatch(line.strip()))
+        ]
+        existing = next(((index, number) for number, (index, label)
+                         in enumerate(headings) if label == date), None)
+        bullet = "- " + event
+        if existing is not None:
+            index, number = existing
+            end = headings[number + 1][0] if number + 1 < len(headings) else len(lines)
+            section = lines[index + 1:end]
+            if bullet not in section:
+                while end > index + 1 and not lines[end - 1].strip():
+                    end -= 1
+                lines.insert(end, bullet)
+        else:
+            later = next((i for i, label in headings
+                          if datetime.strptime(label, "%d.%m.%Y") >
+                             datetime.strptime(date, "%d.%m.%Y")), None)
+            new_lines = ["", f"## {date}", bullet, ""]
+            if later is None:
+                lines.extend(new_lines)
+            else:
+                lines[later:later] = new_lines
+    result = "\n".join(lines).rstrip() + "\n"
+    if len(result) > MAX_INPUT_FILE:
+        raise StateError("Хронология превышает допустимый размер файла")
+    return result
 
 
 class SessionStore:
@@ -303,11 +386,31 @@ class SessionStore:
     def commit_turn(
         self, session_id: str, expected_version: int, reader_text: str,
         narration: str, files: dict[str, str],
+        timeline_events: list[str] | None = None,
+        timeline_no_change_reason: str = "",
     ) -> dict[str, Any]:
+        """Every turn explicitly decides whether to add significant facts."""
         if not isinstance(reader_text, str) or not isinstance(narration, str) or not narration.strip():
             raise StateError("Нужны полные сообщения читателя и писателя")
-        if "state/scene.md" not in files:
+        if not isinstance(files, dict) or "state/scene.md" not in files:
             raise StateError("Состояние сцены обязательно на каждом игровом ходу")
+        if "state/timeline.md" in files:
+            raise StateError(
+                "Хронология обновляется автоматически из timeline_events; "
+                "не передавайте state/timeline.md в files"
+            )
+        # No implicit fallback: a forgotten chronology check is an error.
+        parsed = _parse_timeline_events(timeline_events)
+        if not parsed:
+            if not isinstance(timeline_no_change_reason, str) or len(
+                timeline_no_change_reason.strip()
+            ) < 8:
+                raise StateError(
+                    "Укажите значимые timeline_events либо объясните, "
+                    "почему хронология за этот ход не изменилась"
+                )
+        elif timeline_no_change_reason:
+            raise StateError("При наличии событий не нужен timeline_no_change_reason")
         root = self._root(session_id)
         with self._locked(root):
             prior = self._current(root)
@@ -318,13 +421,62 @@ class SessionStore:
             if prior["audit_15_due"] or prior["audit_60_due"]:
                 raise StateError("Сначала завершите обязательный аудит")
             next_turn = prior["turn"] + 1
+            changes = dict(files)
+            if parsed:
+                current = self._revision(root, prior["version"])
+                before = (current / "state/timeline.md").read_text(encoding="utf-8")
+                changes["state/timeline.md"] = _append_timeline(before, parsed)
             log_entry = {
                 "turn": next_turn, "reader": reader_text, "narration": narration,
+                "timeline_events": timeline_events,
+                "timeline_no_change_reason": timeline_no_change_reason,
             }
             return self._write_revision(
-                root, prior, files, status="active", turn=next_turn,
+                root, prior, changes, status="active", turn=next_turn,
                 journal_entry=log_entry,
             )
+
+    def repair_timeline(
+        self, session_id: str, expected_version: int,
+        source_turns: list[int], timeline_events: list[str],
+    ) -> dict[str, Any]:
+        """Backfill confirmed facts from recorded turns without a gameplay turn."""
+        parsed = _parse_timeline_events(timeline_events)
+        if not parsed:
+            raise StateError("Для восстановления нужны конкретные события")
+        if not isinstance(source_turns, list) or not source_turns or any(
+            type(value) is not int or value <= 0 for value in source_turns
+        ):
+            raise StateError("Укажите существующие номера исходных ходов")
+        root = self._root(session_id)
+        with self._locked(root):
+            prior = self._current(root)
+            if prior["version"] != expected_version:
+                raise StateError("Версия устарела; ничего не восстановлено")
+            if prior["status"] not in ("active", "ready"):
+                raise StateError("Восстановление допустимо только для готовой новеллы")
+            rev = self._revision(root, prior["version"])
+            raw_journal = (rev / "system/turns.jsonl").read_text(encoding="utf-8")
+            known_turns = {
+                json.loads(line)["turn"] for line in raw_journal.splitlines()
+                if line.strip()
+            }
+            if not set(source_turns).issubset(known_turns):
+                raise StateError("Один из указанных исходных ходов отсутствует в журнале")
+            old = (rev / "state/timeline.md").read_text(encoding="utf-8")
+            new = _append_timeline(old, parsed)
+            if new == old:
+                return {
+                    **prior, "repaired_from_turns": sorted(set(source_turns)),
+                    "added_events": 0, "already_present": True,
+                }
+            updated = self._write_revision(
+                root, prior, {"state/timeline.md": new}
+            )
+            return {
+                **updated, "repaired_from_turns": sorted(set(source_turns)),
+                "submitted_events": len(parsed), "gameplay_turn_added": False,
+            }
 
     def commit_audit(
         self, session_id: str, expected_version: int, kind: int,

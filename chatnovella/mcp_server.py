@@ -134,15 +134,38 @@ def read_novella_chunk(packet_id: str, index: int) -> dict[str, Any]:
 @mcp.tool()
 def save_novella_turn(
     session_id: str, expected_version: int, reader_text: str,
-    narration: str, files: dict[str, str],
+    narration: str, files: dict[str, str], timeline_events: list[str],
+    timeline_no_change_reason: str = "",
 ) -> dict[str, Any]:
-    """Commit a full turn BEFORE publishing. Must include state/scene.md.
+    """Save the scene AND require an explicit chronology decision.
 
-    Include only other changed files. recent.md and exact transcript are updated
-    by Amvera. Old version cannot overwrite the latest state from another chat.
+    timeline_events: concise confirmed events ["02.05.2024 | произошло ..."].
+    Send an empty list ONLY when no significant event occurred; then provide
+    timeline_no_change_reason. Amvera appends dated events to timeline.md.
+    Do NOT put state/timeline.md in files: it is written by the server.
+    An omitted chronology decision rejects the entire turn before saving.
     """
     return store.commit_turn(
-        session_id, expected_version, reader_text, narration, files
+        session_id, expected_version, reader_text, narration, files,
+        timeline_events=timeline_events,
+        timeline_no_change_reason=timeline_no_change_reason,
+    )
+
+
+@mcp.tool()
+def repair_novella_timeline(
+    session_id: str, expected_version: int,
+    source_turns: list[int], timeline_events: list[str],
+) -> dict[str, Any]:
+    """Backfill confirmed facts from EXISTING saved turns, no new game turn.
+
+    Check exact saved scenes first. Provide format:
+    ["02.05.2024 | факт из хода 1", "02.05.2024 | факт из хода 2"].
+    The listed source_turns must exist in the saved journal. Only the
+    chronology file is changed, with version check and revision backup.
+    """
+    return store.repair_timeline(
+        session_id, expected_version, source_turns, timeline_events
     )
 
 

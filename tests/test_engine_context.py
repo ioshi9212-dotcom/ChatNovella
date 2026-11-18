@@ -75,7 +75,8 @@ class TestEngineContext(unittest.TestCase):
         self.assertIn("NEW_SKIN_VERSION_2", second)
         meta = self.store.commit_turn(
             self.sid, self.ready["version"], "Ход читателя",
-            "Ответ GPT", {"state/scene.md": "Новая поза"}
+            "Ответ GPT", {"state/scene.md": "Новая поза"},
+            timeline_events=[], timeline_no_change_reason="Это лишь смена позы"
         )
         third = self.unpack(self.store.prepare_turn(self.sid, []))
         self.assertIn("NEW_SKIN_VERSION_2", third)
@@ -86,7 +87,8 @@ class TestEngineContext(unittest.TestCase):
         with self.assertRaises(StateError):
             self.store.commit_turn(
                 self.sid, self.ready["version"], "Действие", "Сцена",
-                {"state/scene.md": "Сидит", "engine/skin_builder.md": "Подмена"}
+                {"state/scene.md": "Сидит", "engine/skin_builder.md": "Подмена"},
+                timeline_events=[], timeline_no_change_reason="Обычный ход без событий"
             )
 
     def test_required_rule_absent_fails_closed(self):
