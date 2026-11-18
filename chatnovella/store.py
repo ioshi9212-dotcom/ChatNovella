@@ -150,8 +150,17 @@ def _append_timeline(previous: str, events: list[tuple[str, str]]) -> str:
     has_date = any(DATE_HEADING.fullmatch(line.strip())
                    for line in previous.splitlines())
     if "## [ДД.ММ.ГГГГ]" in previous and not has_date:
-        # Remove ONLY the untouched stock template, not a written chronology.
-        if "Факты: что произошло на самом деле" in previous:
+        # Drop the untouched original template ONLY if it contains no real
+        # notes. Never erase user-authored events appended under the placeholder.
+        template_lines = {
+            TIMELINE_HEADER,
+            "## [ДД.ММ.ГГГГ]",
+            "- [Только событие, повлиявшее на сюжет, знания, отношения, положение дел или важные предметы.]",
+            "- [Время добавлять, только если оно важно.]",
+            "Факты: что произошло на самом деле, без выдуманных трактовок. Не записывать бытовые действия без последствий. Частные убеждения персонажей — только в их `knowledge.md`. Записи можно уплотнять без удаления фактов и причин.",
+        }
+        if all(not line.strip() or line.strip() in template_lines
+               for line in previous.splitlines()):
             previous = TIMELINE_HEADER + "\n"
     lines = (previous.strip() or TIMELINE_HEADER).splitlines()
     for date, event in events:
