@@ -329,11 +329,19 @@ class SessionStore:
         root = self._root(session_id)
         with self._locked(root):
             prior = self._current(root)
-            if prior["status"] != "setup":
-                raise StateError("Редактирование анкеты допустимо только до активации")
             if prior["version"] != expected_version:
                 raise StateError("Версия устарела; перечитайте состояние")
-            return self._write_revision(root, prior, files)
+            if prior["turn"] != 0 or prior["status"] not in ("setup", "ready", "active"):
+                raise StateError("Редактирование настройки запрещено после первого игрового хода")
+            if prior["status"] != "setup":
+                rev = self._revision(root, prior["version"])
+                if (rev / "system/turns.jsonl").read_text(encoding="utf-8").strip():
+                    raise StateError("В журнале уже есть игровой ход; настройка заблокирована")
+                if not files:
+                    raise StateError("Передайте исправленные файлы настройки")
+            # A prelaunch correction reopens setup and invalidates old packets.
+            # It preserves the same session/original and requires activation again.
+            return self._write_revision(root, prior, files, status="setup")
 
     def setup_report(self, session_id: str) -> dict[str, Any]:
         """Find missing files and unresolved fields without inventing them."""
@@ -351,12 +359,11 @@ class SessionStore:
             for npc in sorted(chars.glob("NPC_*")):
                 if not npc.is_dir():
                     continue
-                for name in (
-                    "core.md", "appearance.md", "voice.md", "personality.md",
-                    "past.md", "knowledge.md", "relations.md",
-                ):
+                # The launch check must require every physical-participation
+                # module, including abilities.md, just like prepare_turn.
+                for name in CHAR_FILES:
                     p = npc / name
-                    if not p.is_file():
+                    if not p.is_file() or not p.read_text(encoding="utf-8").strip():
                         missing.append(str(p.relative_to(rev)))
         candidates = [
             rev / "novel.md", rev / "pov.md",
@@ -389,6 +396,11 @@ class SessionStore:
             if prior["status"] != "setup" or prior["version"] != expected_version:
                 raise StateError("Сессия уже запущена или версия устарела")
             report = self.setup_report(session_id)
+            if report["missing_files"]:
+                raise StateError(
+                    "Заполните обязательные файлы до запуска: "
+                    + ", ".join(report["missing_files"])
+                )
             if not report["ready_without_approval"] and not reader_approved_gaps:
                 raise StateError("Сначала согласуйте пропуски с читателем; вызовите get_setup_report")
             return self._write_revision(root, prior, {}, status="ready")

@@ -85,17 +85,25 @@ def read_original_during_setup(session_id: str) -> str:
 def save_setup_files(
     session_id: str, expected_version: int, files: dict[str, str],
 ) -> dict[str, Any]:
-    """Fill state/NPC templates during setup with approved source facts.
+    """Fill state/NPC templates, or repair this same session BEFORE turn 1.
 
     Example: {"characters/NPC_001/core.md":"..."}.
     Missing facts require reader decision: supply, allow invention, or skip.
+    A ready session with zero saved turns can be corrected without recreation.
+    This reopens setup: call get_setup_report and finish_setup again, then fetch
+    a new turn packet. Original and session ID stay unchanged. After turn 1,
+    setup editing is forbidden.
     """
     return store.update_setup(session_id, expected_version, files)
 
 
 @mcp.tool()
 def get_setup_report(session_id: str) -> dict[str, Any]:
-    """List gaps in setup. Ask the reader: fill herself, invent with consent, or skip."""
+    """Check all eight NPC modules, including abilities.md, and setup gaps.
+
+    Missing/empty required files block launch even with approved gaps. For
+    unknown facts ask the reader: supply, invent with consent, or mark unknown.
+    """
     return store.setup_report(session_id)
 
 
