@@ -112,7 +112,8 @@ class TestStore(unittest.TestCase):
         self.assertIn("Я" * (CHUNK_SIZE * 2 + 15), "".join(chunks))
         self.store.commit_turn(
             self.id, self.store.read_state(self.id)["version"],
-            "Действие", "Текст", {"state/scene.md": "новая поза"}
+            "Действие", "Текст", {"state/scene.md": "новая поза"},
+            timeline_events=[], timeline_no_change_reason="Значимого события нет"
         )
         with self.assertRaises(StateError):
             self.store.read_chunk(packet["packet_id"], 0)
@@ -127,12 +128,14 @@ class TestStore(unittest.TestCase):
                     "## ITEM_001 — зажигалка\nУ кого физически: POV\n"
                 ),
             },
+            timeline_events=["02.05.2024 | Лиам передал Ринате зажигалку."],
         )
         self.assertEqual(meta["turn"], 1)
         with self.assertRaises(StateError):
             self.store.commit_turn(
                 self.id, ready["version"], "1", "2",
-                {"state/scene.md": "устаревшая версия"}
+                {"state/scene.md": "устаревшая версия"},
+                timeline_events=[], timeline_no_change_reason="Новых фактов нет"
             )
         blob = self.packet_text(self.store.prepare_turn(self.id, []))
         self.assertIn("Лиам отдал зажигалку", blob)
@@ -158,7 +161,8 @@ class TestStore(unittest.TestCase):
         for number in range(1, 61):
             meta = self.store.commit_turn(
                 self.id, meta["version"], f"reader-{number}",
-                f"writer-{number}", {"state/scene.md": f"Сцена {number}"}
+                f"writer-{number}", {"state/scene.md": f"Сцена {number}"},
+                timeline_events=[], timeline_no_change_reason="Никаких значимых изменений"
             )
             if number % 15 == 0:
                 self.assertTrue(meta["audit_15_due"])
