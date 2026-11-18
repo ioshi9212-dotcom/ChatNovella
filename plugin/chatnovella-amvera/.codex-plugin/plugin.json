@@ -1,0 +1,19 @@
+{
+  "apps": "./.app.json",
+  "author": {
+    "name": "App developer"
+  },
+  "description": "ChatNovella Amvera",
+  "interface": {
+    "capabilities": [],
+    "category": "Other",
+    "defaultPrompt": null,
+    "developerName": "App developer",
+    "displayName": "ChatNovella Amvera",
+    "longDescription": "ChatNovella Amvera",
+    "shortDescription": "ChatNovella Amvera"
+  },
+  "name": "dev-6afd39aad9808191bf94bb81e3c2f394",
+  "version": "1.0.1",
+  "skills": "./skills"
+}
