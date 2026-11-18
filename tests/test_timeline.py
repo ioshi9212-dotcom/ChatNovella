@@ -40,11 +40,18 @@ class TestTimelineIntegrity(unittest.TestCase):
             encoding="utf-8"
         )
 
+    def complete_packet(self):
+        packet = self.store.prepare_turn(self.sid, [])
+        for index in range(packet["count"]):
+            self.store.read_chunk(packet["packet_id"], index)
+        return packet["packet_id"]
+
     def save(self, scene="Сцена", events=None, reason="Это обычная реплика без сюжетного события"):
         self.meta = self.store.commit_turn(
             self.sid, self.meta["version"], "Реплика читателя", scene,
             {"state/scene.md": scene},
             timeline_events=events, timeline_no_change_reason=reason if events is None or not events else "",
+            packet_id=self.complete_packet(),
         )
         return self.meta
 
