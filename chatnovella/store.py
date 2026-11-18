@@ -255,6 +255,7 @@ class SessionStore:
             meta = {
                 "session_id": session_id, "status": "setup", "version": 0,
                 "turn": 0, "audit_15_due": False, "audit_60_due": False,
+                "setup_contract": 2,
             }
             _atomic_write(root / "current.json", _json_dumps(meta))
             return meta
@@ -357,9 +358,18 @@ class SessionStore:
                     p = npc / name
                     if not p.is_file():
                         missing.append(str(p.relative_to(rev)))
-        candidates = [rev / "novel.md", rev / "pov.md", rev / "state/scene.md"]
+        candidates = [
+            rev / "novel.md", rev / "pov.md",
+            *(rev / name for name in STATE_FILES if name != "state/recent.md"),
+        ]
         if chars.exists():
             candidates += list(chars.glob("NPC_*/*.md"))
+        # Do not silently approve story setups that still contain the sample
+        # NPC roster/arcs. Empty timeline is valid until the first game turn.
+        original_length = len((root / "original.md").read_text(encoding="utf-8"))
+        npc_directories = list(chars.glob("NPC_*")) if chars.exists() else []
+        if original_length > 6000 and not any(npc.is_dir() for npc in npc_directories):
+            unresolved.append("characters/: длинный исходник, но нет ни одной анкеты NPC")
         for p in candidates:
             if not p.is_file():
                 continue
@@ -383,13 +393,40 @@ class SessionStore:
                 raise StateError("Сначала согласуйте пропуски с читателем; вызовите get_setup_report")
             return self._write_revision(root, prior, {}, status="ready")
 
+    def _require_complete_turn_packet(
+        self, session_id: str, version: int, packet_id: str | None,
+    ) -> None:
+        """Called under the session lock, which also serializes read receipts."""
+        if not isinstance(packet_id, str) or not re.fullmatch(r"[a-f0-9]{32}", packet_id):
+            raise StateError(
+                "Перед сохранением нужен packet_id от prepare_novella_turn и все его чанки"
+            )
+        path = self.packets / f"{packet_id}.json"
+        if not path.is_file():
+            raise StateError("Пакет контекста не найден; получите новый")
+        packet = json.loads(path.read_text(encoding="utf-8"))
+        if (packet.get("purpose") != "turn"
+                or packet.get("session_id") != session_id
+                or packet.get("version") != version):
+            raise StateError("Пакет от другой сессии, другого хода или аудита")
+        count = packet.get("count")
+        if type(count) is not int or count < 1:
+            raise StateError("Неверное число чанков")
+        seen = packet.get("read_indices", [])
+        if not isinstance(seen, list) or set(seen) != set(range(count)):
+            missing = sorted(set(range(count)) - set(seen if isinstance(seen, list) else []))
+            raise StateError(
+                f"Контекст прочитан не полностью: не запрошены чанки {missing}"
+            )
+
     def commit_turn(
         self, session_id: str, expected_version: int, reader_text: str,
         narration: str, files: dict[str, str],
         timeline_events: list[str] | None = None,
         timeline_no_change_reason: str = "",
+        packet_id: str | None = None,
     ) -> dict[str, Any]:
-        """Every turn explicitly decides whether to add significant facts."""
+        """Every turn requires explicit timeline review and fully fetched context."""
         if not isinstance(reader_text, str) or not isinstance(narration, str) or not narration.strip():
             raise StateError("Нужны полные сообщения читателя и писателя")
         if not isinstance(files, dict) or "state/scene.md" not in files:
@@ -420,6 +457,9 @@ class SessionStore:
                 raise StateError("Сессия ещё не активирована")
             if prior["audit_15_due"] or prior["audit_60_due"]:
                 raise StateError("Сначала завершите обязательный аудит")
+            # It is not possible to prove the model UNDERSTOOD each chunk,
+            # but the server can require all of them to have been fetched.
+            self._require_complete_turn_packet(session_id, prior["version"], packet_id)
             next_turn = prior["turn"] + 1
             changes = dict(files)
             if parsed:
@@ -500,6 +540,7 @@ class SessionStore:
 
     def _packet(
         self, session_id: str, version: int, parts: list[tuple[str, str]],
+        purpose: str = "turn",
     ) -> dict[str, Any]:
         full = "".join(
             f"\n===== FILE {path} =====\n{text}\n===== END {path} =====\n"
@@ -513,6 +554,7 @@ class SessionStore:
         payload = {
             "session_id": session_id, "version": version, "chunks": chunks,
             "count": len(chunks), "total_characters": len(full),
+            "purpose": purpose, "read_indices": [],
         }
         _atomic_write(self.packets / f"{packet_id}.json", _json_dumps(payload))
         return {
@@ -563,6 +605,15 @@ class SessionStore:
                 chosen.append("past.md")
             for filename in chosen:
                 name = f"characters/{npc_id}/{filename}"
+                if not (rev / name).is_file():
+                    if meta.get("setup_contract", 1) >= 2:
+                        raise StateError(
+                            f"Для NPC {npc_id} нет обязательной анкеты {filename}. "
+                            "Сначала заполните файлы персонажа при настройке"
+                        )
+                    # Older sessions may not have character files yet.
+                    # Preserve their legacy behavior rather than breaking play.
+                    continue
                 if name not in seen:
                     names.append(name)
                     seen.add(name)
@@ -618,21 +669,31 @@ class SessionStore:
             parts.append(
                 (str(path.relative_to(rev)), path.read_text(encoding="utf-8"))
             )
-        return self._packet(session_id, meta["version"], parts)
+        return self._packet(session_id, meta["version"], parts, purpose="audit")
 
     def read_chunk(self, packet_id: str, index: int) -> dict[str, Any]:
-        if not re.fullmatch(r"[a-f0-9]{32}", packet_id):
+        """Deliver a chunk and persist a fetch receipt for this session version."""
+        if not isinstance(packet_id, str) or not re.fullmatch(r"[a-f0-9]{32}", packet_id):
             raise StateError("Неверный ID пакета")
         packet_file = self.packets / f"{packet_id}.json"
         if not packet_file.is_file():
             raise StateError("Пакет не найден (или удалён при очистке)")
-        packet = json.loads(packet_file.read_text(encoding="utf-8"))
-        meta = self.read_state(packet["session_id"])
-        if meta["version"] != packet["version"]:
-            raise StateError("Пакет устарел: состояние изменилось, соберите заново")
-        if type(index) is not int or not 0 <= index < packet["count"]:
-            raise StateError("Неверный номер чанка")
-        return {
-            "index": index, "count": packet["count"],
-            "text": packet["chunks"][index], "version": packet["version"],
-        }
+        initial = json.loads(packet_file.read_text(encoding="utf-8"))
+        root = self._root(initial["session_id"])
+        # Same session lock as commit_turn prevents racing with a save.
+        with self._locked(root):
+            packet = json.loads(packet_file.read_text(encoding="utf-8"))
+            meta = self._current(root)
+            if meta["version"] != packet["version"]:
+                raise StateError("Пакет устарел: состояние изменилось, соберите заново")
+            if type(index) is not int or not 0 <= index < packet["count"]:
+                raise StateError("Неверный номер чанка")
+            receipt = set(packet.get("read_indices", []))
+            if index not in receipt:
+                packet["read_indices"] = sorted(receipt | {index})
+                _atomic_write(packet_file, _json_dumps(packet))
+            return {
+                "index": index, "count": packet["count"],
+                "text": packet["chunks"][index], "version": packet["version"],
+            }
+

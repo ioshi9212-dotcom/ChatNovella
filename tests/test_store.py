@@ -49,6 +49,11 @@ class TestStore(unittest.TestCase):
             for index in range(packet["count"])
         )
 
+    def complete_packet(self):
+        packet = self.store.prepare_turn(self.id, [])
+        self.packet_text(packet)
+        return packet["packet_id"]
+
     def test_setup_report_requires_reader_approval(self):
         edit = self.store.update_setup(
             self.id, 0, {"pov.md": "Имя: не задано"}
@@ -113,7 +118,8 @@ class TestStore(unittest.TestCase):
         self.store.commit_turn(
             self.id, self.store.read_state(self.id)["version"],
             "Действие", "Текст", {"state/scene.md": "новая поза"},
-            timeline_events=[], timeline_no_change_reason="Значимого события нет"
+            timeline_events=[], timeline_no_change_reason="Значимого события нет",
+            packet_id=packet["packet_id"],
         )
         with self.assertRaises(StateError):
             self.store.read_chunk(packet["packet_id"], 0)
@@ -129,13 +135,15 @@ class TestStore(unittest.TestCase):
                 ),
             },
             timeline_events=["02.05.2024 | Лиам передал Ринате зажигалку."],
+            packet_id=self.complete_packet(),
         )
         self.assertEqual(meta["turn"], 1)
         with self.assertRaises(StateError):
             self.store.commit_turn(
                 self.id, ready["version"], "1", "2",
                 {"state/scene.md": "устаревшая версия"},
-                timeline_events=[], timeline_no_change_reason="Новых фактов нет"
+                timeline_events=[], timeline_no_change_reason="Новых фактов нет",
+                packet_id=self.complete_packet(),
             )
         blob = self.packet_text(self.store.prepare_turn(self.id, []))
         self.assertIn("Лиам отдал зажигалку", blob)
@@ -162,7 +170,8 @@ class TestStore(unittest.TestCase):
             meta = self.store.commit_turn(
                 self.id, meta["version"], f"reader-{number}",
                 f"writer-{number}", {"state/scene.md": f"Сцена {number}"},
-                timeline_events=[], timeline_no_change_reason="Никаких значимых изменений"
+                timeline_events=[], timeline_no_change_reason="Никаких значимых изменений",
+                packet_id=self.complete_packet(),
             )
             if number % 15 == 0:
                 self.assertTrue(meta["audit_15_due"])
