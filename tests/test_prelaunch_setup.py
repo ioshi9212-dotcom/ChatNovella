@@ -25,7 +25,8 @@ class TestPrelaunchSetup(unittest.TestCase):
 
     def profiles(self, abilities=True):
         return {
-            f"characters/NPC_001/{name}": f"Подтверждённый канон: {name}"
+            f"characters/NPC_001/{name}": ("- интерес 50/+0" if name == "relations.md"
+                                          else f"Подтверждённый канон: {name}")
             for name in CHAR_FILES if abilities or name != "abilities.md"
         }
 

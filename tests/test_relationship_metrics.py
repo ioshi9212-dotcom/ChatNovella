@@ -1,0 +1,158 @@
+"""Numeric relationship memory must exist, persist and be recoverable safely."""
+import tempfile
+import unittest
+from pathlib import Path
+
+from chatnovella.store import (
+    CHAR_FILES, STATE_FILES, SessionStore, StateError, _atomic_write,
+    _validate_relation,
+)
+
+
+class TestRelationshipMetrics(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        base = Path(self.tmp.name)
+        template = base / "templates"
+        for name in STATE_FILES:
+            p = template / name
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text("Готовое состояние", encoding="utf-8")
+        self.store = SessionStore(base / "data", template)
+        self.meta = self.store.create_session("Оригинал 1:1\n", "Канон", "POV")
+        self.sid = self.meta["session_id"]
+        self.path = "characters/NPC_001/relations.md"
+        self.basis = "Начальная оценка игровой механики по подтверждённым отношениям"
+
+    def file(self, name, meta=None):
+        meta = meta or self.store.read_state(self.sid)
+        return self.store._revision(self.store._root(self.sid), meta["version"]) / name
+
+    def seed_legacy(self):
+        # Old versions accepted prose-only relation cards.
+        for name in CHAR_FILES:
+            _atomic_write(self.file(f"characters/NPC_001/{name}"),
+                          "Давний знакомый, проявляет интерес." if name == "relations.md" else "Канон")
+
+    def start(self, numeric=True):
+        self.seed_legacy()
+        if numeric:
+            self.meta = self.store.update_setup(self.sid, self.meta["version"], {
+                self.path: "Описание отношений.\n- интерес 50/+0\n- доверие 30/+0\n",
+            })
+            self.meta = self.store.activate(self.sid, self.meta["version"])
+        else:
+            self.meta = self.store._write_revision(
+                self.store._root(self.sid), self.meta, {}, status="ready"
+            )
+
+    def save(self, relation=None):
+        packet = self.store.prepare_turn(self.sid, [])
+        for i in range(packet["count"]):
+            self.store.read_chunk(packet["packet_id"], i)
+        files = {"state/scene.md": "Сцена после хода"}
+        if relation is not None:
+            files[self.path] = relation
+        return self.store.commit_turn(
+            self.sid, self.meta["version"], "Действие", "Ответ сцены", files,
+            timeline_events=[], timeline_no_change_reason="Обычный разговор без новых событий",
+            packet_id=packet["packet_id"],
+        )
+
+    def test_missing_duplicate_and_other_npc_numbers_are_not_valid_metrics(self):
+        for body in (
+            "Только дружеская симпатия словами.",
+            "## К другим НПС\n- доверие 50/+0",
+            "- интерес 50/+0\n- ИНТЕРЕС 60/+0",
+        ):
+            with self.subTest(body=body), self.assertRaises(StateError):
+                _validate_relation(body, self.path)
+
+    def test_bad_legacy_setup_blocks_launch_even_with_approved_gaps(self):
+        self.seed_legacy()
+        report = self.store.setup_report(self.sid)
+        self.assertEqual(report["npc_ids"], ["NPC_001"])
+        self.assertTrue(report["relation_errors"])
+        self.assertFalse(report["ready_without_approval"])
+        with self.assertRaisesRegex(StateError, "числовые отношения"):
+            self.store.activate(self.sid, self.meta["version"], True)
+        with self.assertRaisesRegex(StateError, "Нет числовых"):
+            self.store.update_setup(self.sid, self.meta["version"], {self.path: "Описание без шкал"})
+
+    def test_gameplay_cannot_erase_a_scale_or_lie_about_delta(self):
+        self.start()
+        before = self.store.read_state(self.sid)
+        for body in (
+            "Теперь только словами.",
+            "- интерес 50/+0",
+            "- интерес 52/+1\n- доверие 30/+0",
+        ):
+            with self.subTest(body=body), self.assertRaises(StateError):
+                self.save(body)
+            self.assertEqual(self.store.read_state(self.sid), before)
+        self.meta = self.save("- интерес 52/+2\n- доверие 30/+0")
+        self.assertEqual(self.meta["turn"], 1)
+        self.assertIn("интерес 52/+2", self.file(self.path).read_text())
+
+    def test_initialize_preserves_prose_original_and_transcript_without_turn(self):
+        self.start(numeric=False)
+        self.meta = self.save()
+        before = self.meta
+        prose = self.file(self.path).read_text()
+        journal = self.file("system/turns.jsonl").read_bytes()
+        result = self.store.initialize_relationship_metrics(
+            self.sid, before["version"], {"NPC_001": {"интерес": 65, "доверие": 20}}, self.basis
+        )
+        self.assertEqual(result["turn"], before["turn"])
+        self.assertEqual(result["status"], before["status"])
+        self.assertEqual(result["version"], before["version"] + 1)
+        self.assertEqual(result["metrics_sources"]["NPC_001"]["kind"], "initialized")
+        self.assertFalse(result["gameplay_turn_added"])
+        self.assertTrue(self.file(self.path).read_text().endswith(prose))
+        self.assertIn("интерес 65/+0", self.file(self.path).read_text())
+        self.assertEqual(self.file("system/turns.jsonl").read_bytes(), journal)
+        self.assertEqual(self.store.read_original(self.sid), "Оригинал 1:1\n")
+        repeat = self.store.initialize_relationship_metrics(
+            self.sid, result["version"], {"NPC_001": {"интерес": 65, "доверие": 20}}, self.basis
+        )
+        self.assertTrue(repeat["already_present"])
+        self.assertEqual(repeat["version"], result["version"])
+        with self.assertRaisesRegex(StateError, "уже существуют"):
+            self.store.initialize_relationship_metrics(
+                self.sid, result["version"], {"NPC_001": {"интерес": 99}}, self.basis
+            )
+        self.assertEqual(self.store.read_state(self.sid)["version"], result["version"])
+
+    def test_historical_numbers_take_precedence_over_new_estimates(self):
+        self.start()
+        self.meta = self.save()
+        _atomic_write(self.file(self.path), "Описание после старой ошибки без чисел.")
+        with self.assertRaisesRegex(StateError, "Найдены прежние значения"):
+            self.store.initialize_relationship_metrics(
+                self.sid, self.meta["version"], {"NPC_001": {"интерес": 99}}, self.basis
+            )
+        result = self.store.initialize_relationship_metrics(
+            self.sid, self.meta["version"], {"NPC_001": {"интерес": 50, "доверие": 30}}, self.basis
+        )
+        self.assertEqual(result["metrics_sources"]["NPC_001"]["kind"], "restored")
+        self.assertIn("source_revision", result["metrics_sources"]["NPC_001"])
+        self.assertEqual(result["turn"], 1)
+
+    def test_invalid_or_stale_batch_is_atomic(self):
+        self.start(numeric=False)
+        before = self.meta
+        for metrics, version in (
+            ({"NPC_001": {"интерес": 50}}, before["version"] - 1),
+            ({"NPC_001": {"интерес": 101}}, before["version"]),
+            ({"NPC_001": {"интерес": True}}, before["version"]),
+            ({"NPC_001": {"интерес": 50}, "NPC_002": {"доверие": 20}}, before["version"]),
+        ):
+            with self.subTest(metrics=metrics), self.assertRaises(StateError):
+                self.store.initialize_relationship_metrics(self.sid, version, metrics, self.basis)
+            self.assertEqual(self.store.read_state(self.sid), before)
+            self.assertNotIn("/+0", self.file(self.path).read_text())
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -80,25 +80,35 @@ def _safe_change(path: str, text: str) -> None:
         raise StateError(f"Некорректное содержимое: {path!r}")
 
 
-def _validate_relation(content: str, path: str) -> None:
-    if not path.endswith("/relations.md"):
-        return
+def _relation_stats(content: str, path: str, required: bool = False) -> dict[str, tuple[int, int]]:
+    """Read NPC-to-POV metrics only; prose and NPC-to-NPC links are separate."""
     header = content.split("## К другим НПС", 1)[0]
-    stats = []
+    stats: dict[str, tuple[int, int]] = {}
     for line in header.splitlines():
-        m = re.match(r"^\s*-\s*[^\n]+?\s+(-?\d+)\s*/\s*([+-]?\d+)\s*$", line)
+        m = re.match(r"^\s*-\s*([^\n]+?)\s+(-?\d+)\s*/\s*([+-]?\d+)\s*$", line)
         if m:
-            value, change = map(int, m.groups())
+            name = " ".join(m.group(1).strip().rstrip(":").casefold().split())
+            value, change = map(int, m.groups()[1:])
+            if name in stats:
+                raise StateError(f"Повторяется показатель отношений: {path}: {name}")
             if not 0 <= value <= 100:
                 raise StateError(f"Число отношения вне 0–100: {path}: {line.strip()}")
             if not -100 <= change <= 100:
                 raise StateError(f"Изменение отношения вне -100..100: {path}: {line.strip()}")
-            stats.append((value, change))
+            stats[name] = (value, change)
+    if required and not stats:
+        raise StateError(f"Нет числовых показателей NPC→POV: {path}; нужны 1–10 строк вида '- интерес 56/+0'")
     if len(stats) > 10:
         raise StateError(f"Больше 10 показателей отношений: {path}")
-    if any(abs(change) > 3 for _, change in stats):
+    if any(abs(change) > 3 for _, change in stats.values()):
         if "Причина резкого изменения:" not in content:
             raise StateError(f"Для скачка >3 нужна строка 'Причина резкого изменения:': {path}")
+    return stats
+
+
+def _validate_relation(content: str, path: str) -> None:
+    if path.endswith("/relations.md"):
+        _relation_stats(content, path, required=True)
 
 
 def _validate_items(content: str) -> None:
@@ -284,6 +294,19 @@ class SessionStore:
     ) -> dict[str, Any]:
         _validate_all(files)
         current = self._revision(root, previous["version"])
+        if journal_entry is not None:
+            for name, text in files.items():
+                if not name.endswith("/relations.md"):
+                    continue
+                old_file = current / name
+                old = _relation_stats(old_file.read_text(encoding="utf-8"), name) if old_file.is_file() else {}
+                new = _relation_stats(text, name, required=True)
+                if set(old) - set(new):
+                    raise StateError(f"Нельзя удалять сохранённые показатели отношений: {name}")
+                for label in old.keys() & new.keys():
+                    value, delta = new[label]
+                    if value != old[label][0] + delta:
+                        raise StateError(f"Значение и дельта не согласованы с прошлым ходом: {name}: {label}")
         new_version = previous["version"] + 1
         final = self._revision(root, new_version)
         if final.exists():
@@ -350,6 +373,8 @@ class SessionStore:
         rev = self._revision(root, meta["version"])
         missing = []
         unresolved = []
+        relation_errors = []
+        npc_ids = []
         for name in ("novel.md", "pov.md", "state/scene.md", "state/locations.md"):
             p = rev / name
             if not p.is_file() or not p.read_text(encoding="utf-8").strip():
@@ -359,12 +384,19 @@ class SessionStore:
             for npc in sorted(chars.glob("NPC_*")):
                 if not npc.is_dir():
                     continue
+                npc_ids.append(npc.name)
                 # The launch check must require every physical-participation
                 # module, including abilities.md, just like prepare_turn.
                 for name in CHAR_FILES:
                     p = npc / name
                     if not p.is_file() or not p.read_text(encoding="utf-8").strip():
                         missing.append(str(p.relative_to(rev)))
+                relation = npc / "relations.md"
+                if relation.is_file():
+                    try:
+                        _relation_stats(relation.read_text(encoding="utf-8"), str(relation.relative_to(rev)), required=True)
+                    except StateError as exc:
+                        relation_errors.append(str(exc))
         candidates = [
             rev / "novel.md", rev / "pov.md",
             *(rev / name for name in STATE_FILES if name != "state/recent.md"),
@@ -386,7 +418,9 @@ class SessionStore:
         return {
             "session_id": session_id, "version": meta["version"],
             "missing_files": missing, "unresolved_fields": unresolved,
-            "ready_without_approval": not missing and not unresolved,
+            "relation_errors": relation_errors,
+            "npc_ids": npc_ids,
+            "ready_without_approval": not missing and not unresolved and not relation_errors,
         }
 
     def activate(self, session_id: str, expected_version: int, reader_approved_gaps: bool = False) -> dict[str, Any]:
@@ -401,6 +435,8 @@ class SessionStore:
                     "Заполните обязательные файлы до запуска: "
                     + ", ".join(report["missing_files"])
                 )
+            if report["relation_errors"]:
+                raise StateError("Исправьте числовые отношения до запуска: " + "; ".join(report["relation_errors"]))
             if not report["ready_without_approval"] and not reader_approved_gaps:
                 raise StateError("Сначала согласуйте пропуски с читателем; вызовите get_setup_report")
             return self._write_revision(root, prior, {}, status="ready")
@@ -487,6 +523,73 @@ class SessionStore:
                 root, prior, changes, status="active", turn=next_turn,
                 journal_entry=log_entry,
             )
+
+    def initialize_relationship_metrics(
+        self, session_id: str, expected_version: int,
+        metrics: dict[str, dict[str, int]], basis: str,
+    ) -> dict[str, Any]:
+        """Append missing scales without rewriting prose, history or gameplay."""
+        if not isinstance(metrics, dict) or not 1 <= len(metrics) <= 100:
+            raise StateError("Нужны показатели для 1–100 существующих NPC")
+        if not isinstance(basis, str) or not 8 <= len(basis.strip()) <= 2000:
+            raise StateError("Укажите основание начальных оценок по канону")
+        root = self._root(session_id)
+        with self._locked(root):
+            prior = self._current(root)
+            if prior["version"] != expected_version:
+                raise StateError("Версия устарела; показатели не записаны")
+            if prior["status"] not in ("setup", "ready", "active"):
+                raise StateError("Недопустимое состояние сессии")
+            rev = self._revision(root, prior["version"])
+            changes = {}
+            sources = {}
+            for npc, values in metrics.items():
+                path = f"characters/{npc}/relations.md"
+                if not isinstance(npc, str) or not re.fullmatch(r"NPC_[A-Za-z0-9_-]{1,60}", npc):
+                    raise StateError("Неверный ID NPC")
+                if not isinstance(values, dict) or not 1 <= len(values) <= 10:
+                    raise StateError(f"Укажите 1–10 индивидуальных показателей: {npc}")
+                normalized = {}
+                for label, value in values.items():
+                    if not isinstance(label, str) or not re.fullmatch(r"[^\n\r/#*]{1,60}", label.strip()):
+                        raise StateError("Неверное название показателя")
+                    key = " ".join(label.strip().rstrip(":").casefold().split())
+                    if not key or key in normalized or type(value) is not int or not 0 <= value <= 100:
+                        raise StateError(f"Неверный или повторяющийся показатель: {npc}")
+                    normalized[key] = value
+                target = rev / path
+                if not target.is_file():
+                    raise StateError(f"Сначала создайте анкету NPC: {path}")
+                previous = target.read_text(encoding="utf-8")
+                existing = _relation_stats(previous, path)
+                if existing:
+                    if {key: value for key, (value, _) in existing.items()} != normalized:
+                        raise StateError(f"Показатели уже существуют; инициализация не может их менять: {npc}")
+                    sources[npc] = {"kind": "already_present"}
+                    continue
+                historical = None
+                for old in sorted((root / "revisions").glob("v[0-9]*"), reverse=True):
+                    if old.name >= rev.name or not (old / path).is_file():
+                        continue
+                    try:
+                        found = _relation_stats((old / path).read_text(encoding="utf-8"), path)
+                    except StateError:
+                        continue
+                    if found:
+                        historical = (old.name, {key: value for key, (value, _) in found.items()})
+                        break
+                if historical and historical[1] != normalized:
+                    raise StateError(f"Найдены прежние значения {npc} в {historical[0]}; восстановите их вместо новых оценок: {historical[1]}")
+                sources[npc] = {"kind": "restored" if historical else "initialized"}
+                if historical:
+                    sources[npc]["source_revision"] = historical[0]
+                note = ("Восстановлены прежние шкалы" if historical else "Новые начальные оценки по канону")
+                block = "## Показатели NPC→POV\n" + "\n".join(f"- {label} {value}/+0" for label, value in normalized.items())
+                changes[path] = block + f"\n\n{note}; без игрового хода. Основание: " + " ".join(basis.splitlines()) + "\n\n" + previous
+            if not changes:
+                return {**prior, "metrics_sources": sources, "gameplay_turn_added": False, "already_present": True}
+            updated = self._write_revision(root, prior, changes)
+            return {**updated, "metrics_sources": sources, "gameplay_turn_added": False}
 
     def repair_timeline(
         self, session_id: str, expected_version: int,

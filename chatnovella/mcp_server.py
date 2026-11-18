@@ -174,6 +174,25 @@ def save_novella_turn(
 
 
 @mcp.tool()
+def initialize_novella_relationship_metrics(
+    session_id: str, expected_version: int,
+    metrics: dict[str, dict[str, int]], basis: str,
+) -> dict[str, Any]:
+    """Add missing NPC-to-POV numeric scales without a new gameplay turn.
+
+    Read the actual relation cards first. Supply 1–10 individual scales per
+    existing NPC, with initial integer values 0..100; delta is recorded as 0.
+    Example: {"NPC_001":{"интерес":65,"доверие":20}}.
+    Explain the canon basis. These are initial game-mechanic estimates unless
+    genuine earlier numeric values exist in revision history. In that case
+    restore the historical values reported by the server instead of guessing.
+    Existing numeric scales cannot be overwritten. Prose, original and game
+    transcript are preserved; the state version changes, gameplay turn does not.
+    """
+    return store.initialize_relationship_metrics(session_id, expected_version, metrics, basis)
+
+
+@mcp.tool()
 def repair_novella_timeline(
     session_id: str, expected_version: int,
     source_turns: list[int], timeline_events: list[str],

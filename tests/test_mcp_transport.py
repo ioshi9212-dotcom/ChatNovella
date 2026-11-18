@@ -40,9 +40,10 @@ class TestMCPTransport(unittest.TestCase):
             response = self.post(client, "tools/list")
             self.assertEqual(response.status_code, 200, response.text)
             tools = {tool["name"] for tool in response.json()["result"]["tools"]}
-            self.assertEqual(len(tools), 13)
+            self.assertEqual(len(tools), 14)
             self.assertTrue({"prepare_novella_turn", "read_novella_chunk",
-                             "save_novella_turn", "repair_novella_timeline"} <= tools)
+                             "save_novella_turn", "repair_novella_timeline",
+                             "initialize_novella_relationship_metrics"} <= tools)
             response = self.post(client, "tools/call", {
                 "name": "list_novella_sessions", "arguments": {},
             })
