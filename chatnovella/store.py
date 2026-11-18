@@ -33,9 +33,9 @@ CHAR_PATH = re.compile(
 SESSION_ID = re.compile(r"^CN_[a-f0-9]{32}$")
 CHUNK_SIZE = 36_000  # Unicode characters; transport reports its unit
 MAX_INPUT_FILE = 2_000_000
-TIMELINE_FORMAT = re.compile(r"^(\\d{2}\\.\\d{2}\\.\\d{4})\\s*\\|\\s*(\\S[^\\n]*)$")
+TIMELINE_FORMAT = re.compile(r"^(\d{2}\.\d{2}\.\d{4})\s*\|\s*(\S[^\n]*)$")
 TIMELINE_HEADER = "# Хронология — строго приватно"
-DATE_HEADING = re.compile(r"^## (\\d{2}\\.\\d{2}\\.\\d{4})\\s*$")
+DATE_HEADING = re.compile(r"^## (\d{2}\.\d{2}\.\d{4})\s*$")
 
 
 # Общие инструкции приложения: не копируются в файлы отдельных сессий.
@@ -124,7 +124,7 @@ def _parse_timeline_events(events: list[str]) -> list[tuple[str, str]]:
         raise StateError("timeline_events: требуется список из 0–30 событий")
     parsed: list[tuple[str, str]] = []
     for raw in events:
-        if not isinstance(raw, str) or len(raw) > 550 or "\\n" in raw:
+        if not isinstance(raw, str) or len(raw) > 550 or "\n" in raw:
             raise StateError("Каждое событие хронологии должно быть одной короткой строкой")
         match = TIMELINE_FORMAT.fullmatch(raw.strip())
         if match is None:
@@ -152,7 +152,7 @@ def _append_timeline(previous: str, events: list[tuple[str, str]]) -> str:
     if "## [ДД.ММ.ГГГГ]" in previous and not has_date:
         # Remove ONLY the untouched stock template, not a written chronology.
         if "Факты: что произошло на самом деле" in previous:
-            previous = TIMELINE_HEADER + "\\n"
+            previous = TIMELINE_HEADER + "\n"
     lines = (previous.strip() or TIMELINE_HEADER).splitlines()
     for date, event in events:
         headings = [
@@ -180,7 +180,7 @@ def _append_timeline(previous: str, events: list[tuple[str, str]]) -> str:
                 lines.extend(new_lines)
             else:
                 lines[later:later] = new_lines
-    result = "\\n".join(lines).rstrip() + "\\n"
+    result = "\n".join(lines).rstrip() + "\n"
     if len(result) > MAX_INPUT_FILE:
         raise StateError("Хронология превышает допустимый размер файла")
     return result
