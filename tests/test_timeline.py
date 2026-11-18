@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from chatnovella.store import SessionStore, StateError
+from chatnovella.store import SessionStore, StateError, _append_timeline
 
 STATE = (
     "state/scene.md", "state/locations.md", "state/roster.md",
@@ -47,6 +47,22 @@ class TestTimelineIntegrity(unittest.TestCase):
             timeline_events=events, timeline_no_change_reason=reason if events is None or not events else "",
         )
         return self.meta
+
+    def test_stock_template_cleared_but_authored_notes_preserved(self):
+        template = (
+            "# Хронология — строго приватно\n\n"
+            "## [ДД.ММ.ГГГГ]\n"
+            "- [Только событие, повлиявшее на сюжет, знания, отношения, положение дел или важные предметы.]\n"
+            "- [Время добавлять, только если оно важно.]\n\n"
+            "Факты: что произошло на самом деле, без выдуманных трактовок. Не записывать бытовые действия без последствий. Частные убеждения персонажей — только в их `knowledge.md`. Записи можно уплотнять без удаления фактов и причин.\n"
+        )
+        event = [("02.05.2024", "Рекламный экран показал крышу Ринаты.")]
+        result = _append_timeline(template, event)
+        self.assertNotIn("[ДД.ММ.ГГГГ]", result)
+        self.assertIn("## 02.05.2024", result)
+        modified = template + "- Дополнительно установлено событие из прошлого.\n"
+        kept = _append_timeline(modified, event)
+        self.assertIn("Дополнительно установлено", kept)
 
     def test_no_implicit_timeline_decision_allowed(self):
         with self.assertRaisesRegex(StateError, "timeline_events"):
