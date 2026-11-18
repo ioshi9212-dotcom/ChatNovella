@@ -25,6 +25,7 @@ BASE = Path(__file__).resolve().parents[1]
 store = SessionStore(
     os.environ.get("CHATNOVELLA_DATA_DIR", "/data/chatnovella"),
     BASE / "templates/session",
+    engine_root=BASE,
 )
 mcp = FastMCP("ChatNovella", stateless_http=True, json_response=True)
 
@@ -87,7 +88,11 @@ def finish_setup(session_id: str, expected_version: int,
 def prepare_novella_turn(
     session_id: str, participants: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Prepare all common files and selected NPC sections in lossless 36k chunks.
+    """Read Rules, Skin Builder, ALL director modules each turn, plus session files.
+
+    Static engine files always come first and are loaded fresh from the
+    deployed Amvera app; they are never duplicated into session state.
+    Entire content is delivered in lossless 36k-character chunks.
 
     Example: [{"id":"NPC_001","mode":"physical"}].
     Modes physical: all; phone: voice, personality, knowledge, relations;
