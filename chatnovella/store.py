@@ -357,9 +357,18 @@ class SessionStore:
                     p = npc / name
                     if not p.is_file():
                         missing.append(str(p.relative_to(rev)))
-        candidates = [rev / "novel.md", rev / "pov.md", rev / "state/scene.md"]
+        candidates = [
+            rev / "novel.md", rev / "pov.md",
+            *(rev / name for name in STATE_FILES if name != "state/recent.md"),
+        ]
         if chars.exists():
             candidates += list(chars.glob("NPC_*/*.md"))
+        # Do not silently approve story setups that still contain the sample
+        # NPC roster/arcs. Empty timeline is valid until the first game turn.
+        original_length = len((root / "original.md").read_text(encoding="utf-8"))
+        npc_directories = list(chars.glob("NPC_*")) if chars.exists() else []
+        if original_length > 6000 and not any(npc.is_dir() for npc in npc_directories):
+            unresolved.append("characters/: длинный исходник, но нет ни одной анкеты NPC")
         for p in candidates:
             if not p.is_file():
                 continue
@@ -595,6 +604,11 @@ class SessionStore:
                 chosen.append("past.md")
             for filename in chosen:
                 name = f"characters/{npc_id}/{filename}"
+                if not (rev / name).is_file():
+                    raise StateError(
+                        f"Для NPC {npc_id} нет обязательной анкеты {filename}. "
+                        "Сначала заполните файлы персонажа при настройке"
+                    )
                 if name not in seen:
                     names.append(name)
                     seen.add(name)
