@@ -135,9 +135,15 @@ def read_novella_chunk(packet_id: str, index: int) -> dict[str, Any]:
 def save_novella_turn(
     session_id: str, expected_version: int, reader_text: str,
     narration: str, files: dict[str, str], timeline_events: list[str],
-    timeline_no_change_reason: str = "",
+    packet_id: str, timeline_no_change_reason: str = "",
 ) -> dict[str, Any]:
-    """Save the scene AND require an explicit chronology decision.
+    """Save only after EVERY context chunk has been fetched.
+
+    packet_id is returned by prepare_novella_turn. Read ALL chunks using
+    read_novella_chunk before save; server verifies receipts and version.
+    This confirms delivery, not whether GPT reasoned correctly about facts.
+
+    The scene requires an explicit chronology decision.
 
     timeline_events: concise confirmed events ["02.05.2024 | произошло ..."].
     Send an empty list ONLY when no significant event occurred; then provide
@@ -149,6 +155,7 @@ def save_novella_turn(
         session_id, expected_version, reader_text, narration, files,
         timeline_events=timeline_events,
         timeline_no_change_reason=timeline_no_change_reason,
+        packet_id=packet_id,
     )
 
 
