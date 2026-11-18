@@ -255,6 +255,7 @@ class SessionStore:
             meta = {
                 "session_id": session_id, "status": "setup", "version": 0,
                 "turn": 0, "audit_15_due": False, "audit_60_due": False,
+                "setup_contract": 2,
             }
             _atomic_write(root / "current.json", _json_dumps(meta))
             return meta
@@ -605,10 +606,14 @@ class SessionStore:
             for filename in chosen:
                 name = f"characters/{npc_id}/{filename}"
                 if not (rev / name).is_file():
-                    raise StateError(
-                        f"Для NPC {npc_id} нет обязательной анкеты {filename}. "
-                        "Сначала заполните файлы персонажа при настройке"
-                    )
+                    if meta.get("setup_contract", 1) >= 2:
+                        raise StateError(
+                            f"Для NPC {npc_id} нет обязательной анкеты {filename}. "
+                            "Сначала заполните файлы персонажа при настройке"
+                        )
+                    # Older sessions may not have character files yet.
+                    # Preserve their legacy behavior rather than breaking play.
+                    continue
                 if name not in seen:
                     names.append(name)
                     seen.add(name)
