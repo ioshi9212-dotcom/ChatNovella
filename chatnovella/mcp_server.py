@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 from starlette.responses import JSONResponse
 
 from chatnovella.store import SessionStore
@@ -27,7 +28,28 @@ store = SessionStore(
     BASE / "templates/session",
     engine_root=BASE,
 )
-mcp = FastMCP("ChatNovella", stateless_http=True, json_response=True)
+PUBLIC_HOST = os.getenv(
+    "CHATNOVELLA_PUBLIC_HOST", "chatnovella-yumikofv.waw0.amvera.tech"
+).strip().lower()
+mcp = FastMCP(
+    "ChatNovella",
+    instructions=(BASE / "docs/PLUGIN_INSTRUCTIONS.md").read_text(encoding="utf-8"),
+    stateless_http=True,
+    json_response=True,
+    transport_security=TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=[
+            PUBLIC_HOST, f"{PUBLIC_HOST}:443",
+            "127.0.0.1", "127.0.0.1:*", "localhost", "localhost:*",
+            "[::1]", "[::1]:*",
+        ],
+        allowed_origins=[
+            f"https://{PUBLIC_HOST}", f"https://{PUBLIC_HOST}:443",
+            "https://chatgpt.com",
+            "http://127.0.0.1:*", "http://localhost:*", "http://[::1]:*",
+        ],
+    ),
+)
 
 
 @mcp.tool()
