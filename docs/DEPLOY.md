@@ -9,26 +9,25 @@ MCP-сервер с HTTP-транспортом, постоянным хране
 
 ## Развёртывание на Amvera
 1. Создать **новый отдельный** проект (не существующий RomanAI).
-2. Подключить GitHub `ioshi9212-dotcom/ChatNovella`.
-   Пока изменения находятся в PR, ветка `feature/chatnovella-state-templates`;
-   после объединения PR использовать `main`.
+2. Подключить GitHub `ioshi9212-dotcom/ChatNovella`, ветка `main`.
 3. Среда Python/pip. В корне уже есть `amvera.yaml`:
    Python 3.12, порт 8080, `/data`, один процесс uvicorn.
-4. В настройках **секретов среды** задать `CHATNOVELLA_API_TOKEN` —
-   случайный длинный пароль минимум 24 символа. Не отправлять его в чат.
-5. Запустить сборку. Проверка: `GET https://<ваш-домен>/health` → 
+4. Переменные окружения **не обязательны**. Без `CHATNOVELLA_API_TOKEN` сервер
+   запускается и принимает запросы без Bearer-токена.
+5. Запустить сборку. Проверка: `GET https://<ваш-домен>/health` →
    `{"status":"ok"}`. MCP endpoint: `/mcp` (проверить после деплоя).
-   Все запросы MCP требуют заголовок `Authorization: Bearer <секрет>`.
 
-**Важно:** поддержку статического Bearer-заголовка в конкретном подключении
-ChatGPT мы ещё не проверяли. Если требуется OAuth, потребуется шлюз.
-Не отключать защиту, чтобы просто добиться подключения.
+**Внимание:** отсутствие токена не ограничивает доступ владельцем панели Amvera.
+Если у приложения есть публичный URL, любые лица, имеющие доступ к этому URL,
+могут обращаться к MCP и читать или изменять сессии. Для закрытого доступа
+можно позднее задать `CHATNOVELLA_API_TOKEN` — случайный секрет минимум
+24 символа — тогда MCP потребует `Authorization: Bearer <секрет>`.
+Конкретный способ передачи авторизации из ChatGPT ещё не проверен.
 
 ## Локальная проверка
 ```bash
 python -m pip install -r requirements.txt
 python -m unittest discover -s tests -v
-export CHATNOVELLA_API_TOKEN="dev-secret-longer-than-24-characters"
 export CHATNOVELLA_DATA_DIR="./local_data"
 uvicorn chatnovella.mcp_server:app --port 8080
 ```
