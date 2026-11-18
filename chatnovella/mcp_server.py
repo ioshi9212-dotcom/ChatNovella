@@ -1,6 +1,7 @@
-"""Authenticated Streamable HTTP MCP endpoint for ChatNovella on Amvera.
+"""Streamable HTTP MCP endpoint for ChatNovella on Amvera.
 
-Set CHATNOVELLA_API_TOKEN in Amvera environment secrets (never commit it).
+CHATNOVELLA_API_TOKEN is optional. When omitted, the endpoint has no
+application-level authentication. Set a strong token to enable Bearer auth.
 """
 from __future__ import annotations
 
@@ -15,7 +16,7 @@ from starlette.responses import JSONResponse
 from chatnovella.store import SessionStore
 
 TOKEN = os.getenv("CHATNOVELLA_API_TOKEN", "")
-if len(TOKEN) < 24:
+if TOKEN and len(TOKEN) < 24:
     raise RuntimeError(
         "Set a strong CHATNOVELLA_API_TOKEN (>=24 characters) in Amvera secrets"
     )
@@ -151,14 +152,15 @@ class BearerMiddleware:
             if scope.get("path") == "/health" and scope.get("method") == "GET":
                 await JSONResponse({"status": "ok"})(scope, receive, send)
                 return
-            headers = dict(scope.get("headers", []))
-            candidate = headers.get(b"authorization", b"")
-            expected = b"Bearer " + self.token
-            if not hmac.compare_digest(candidate, expected):
-                await JSONResponse(
-                    {"error": "unauthorized"}, status_code=401
-                )(scope, receive, send)
-                return
+            if self.token:
+                headers = dict(scope.get("headers", []))
+                candidate = headers.get(b"authorization", b"")
+                expected = b"Bearer " + self.token
+                if not hmac.compare_digest(candidate, expected):
+                    await JSONResponse(
+                        {"error": "unauthorized"}, status_code=401
+                    )(scope, receive, send)
+                    return
         await self.inner(scope, receive, send)
 
 
