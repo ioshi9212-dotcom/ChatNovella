@@ -644,6 +644,12 @@ class SessionStore:
                 parts.append((path, file.read_text(encoding="utf-8")))
         packet = self._packet(session_id, meta["version"], parts)
         packet["engine_files"] = list(ENGINE_CONTEXT_FILES)
+        packet["pre_save_review"] = (
+            "Строго соблюдайте все файлы engine/. После черновика и до сохранения "
+            "выполните шесть пунктов самопроверки из engine/rules.md, включая "
+            "оформление Skin Builder и автономию POV. Исправьте ошибки, "
+            "сохраните исправленный текст и опубликуйте его без чек-листа."
+        )
         return packet
 
     def prepare_audit(self, session_id: str, kind: int) -> dict[str, Any]:

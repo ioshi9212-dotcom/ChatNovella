@@ -129,6 +129,8 @@ def prepare_novella_turn(
     observer: personality, abilities, knowledge, relations;
     message/mentioned: no card. need_past=true optionally for phone/observer.
     Always fetch ALL chunks before writing narrative.
+    Before saving, privately apply the six-point review in engine/rules.md,
+    including strict Skin Builder formatting. Fix draft mistakes first.
     """
     return store.prepare_turn(session_id, participants)
 
@@ -145,7 +147,11 @@ def save_novella_turn(
     narration: str, files: dict[str, str], timeline_events: list[str],
     packet_id: str, timeline_no_change_reason: str = "",
 ) -> dict[str, Any]:
-    """Save only after EVERY context chunk has been fetched.
+    """Save the corrected scene after EVERY chunk and a private six-point review.
+
+    BEFORE calling, apply the short review in engine/rules.md to the actual
+    draft. Follow engine modules strictly; fix Skin Builder, POV, canon and
+    continuity mistakes. Publish the saved text unchanged, without a checklist.
 
     packet_id is returned by prepare_novella_turn. Read ALL chunks using
     read_novella_chunk before save; server verifies receipts and version.
