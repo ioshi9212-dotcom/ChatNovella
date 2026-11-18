@@ -41,7 +41,7 @@ class TestStore(unittest.TestCase):
             "characters/NPC_001/relations.md": "- интерес 56/+2",
             "state/scene.md": "Сидит рядом",
         })
-        return self.store.activate(self.id, meta["version"])
+        return self.store.activate(self.id, meta["version"], reader_approved_gaps=True)
 
     def packet_text(self, packet):
         return "".join(
@@ -86,7 +86,7 @@ class TestStore(unittest.TestCase):
         meta = self.store.update_setup(self.id, 0, {
             "state/timeline.md": "Я" * (CHUNK_SIZE * 2 + 15),
         })
-        self.store.activate(self.id, meta["version"])
+        self.store.activate(self.id, meta["version"], reader_approved_gaps=True)
         packet = self.store.prepare_turn(self.id, [])
         self.assertGreaterEqual(packet["count"], 3)
         chunks = [
