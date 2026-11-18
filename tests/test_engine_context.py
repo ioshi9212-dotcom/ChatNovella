@@ -70,13 +70,15 @@ class TestEngineContext(unittest.TestCase):
         first = self.unpack(self.store.prepare_turn(self.sid, []))
         path = self.engine / "engine/skin_builder.md"
         path.write_text("NEW_SKIN_VERSION_2", encoding="utf-8")
-        second = self.unpack(self.store.prepare_turn(self.sid, []))
+        second_packet = self.store.prepare_turn(self.sid, [])
+        second = self.unpack(second_packet)
         self.assertNotIn("NEW_SKIN_VERSION_2", first)
         self.assertIn("NEW_SKIN_VERSION_2", second)
         meta = self.store.commit_turn(
             self.sid, self.ready["version"], "Ход читателя",
             "Ответ GPT", {"state/scene.md": "Новая поза"},
-            timeline_events=[], timeline_no_change_reason="Это лишь смена позы"
+            timeline_events=[], timeline_no_change_reason="Это лишь смена позы",
+            packet_id=second_packet["packet_id"],
         )
         third = self.unpack(self.store.prepare_turn(self.sid, []))
         self.assertIn("NEW_SKIN_VERSION_2", third)
