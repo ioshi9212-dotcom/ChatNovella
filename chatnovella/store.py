@@ -143,6 +143,8 @@ class SessionStore:
             _atomic_write(root / "original.md", original)
             first = self._revision(root, 0)
             shutil.copytree(self.templates, first)
+            (first / "original.md").unlink(missing_ok=True)
+            (first / "system/session.json").unlink(missing_ok=True)
             _atomic_write(first / "novel.md", novel)
             _atomic_write(first / "pov.md", pov)
             (first / "system").mkdir(exist_ok=True)
