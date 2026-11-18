@@ -36,16 +36,13 @@ MAX_INPUT_FILE = 2_000_000
 # Общие инструкции приложения: не копируются в файлы отдельных сессий.
 # Отправляются в начале КАЖДОГО игрового пакета, до состояния и анкет НПС.
 ENGINE_CONTEXT_FILES = (
-    "rules/technical.md",
-    "runtimes/director.md",
-    "runtimes/npc.md",
-    "runtimes/pov.md",
-    "runtimes/knowledge.md",
-    "runtimes/relations.md",
-    "runtimes/arcs.md",
-    "runtimes/continuity.md",
-    "runtimes/boundaries.md",
-    "skin/skin_builder.md",
+    "engine/rules.md",
+    "engine/director.md",
+    "engine/npc_rules.md",
+    "engine/world_rules.md",
+    "engine/strict_prohibitions.md",
+    "engine/pov_autonomy.md",
+    "engine/skin_builder.md",
 )
 
 
@@ -417,7 +414,7 @@ class SessionStore:
                 if name not in seen:
                     names.append(name)
                     seen.add(name)
-        # Каждый ход читаем актуальные общие правила ИМЕННО с диска Amvera.
+        # Каждый ход читаем 7 общих правил из одной папки engine/ на Amvera.
         # Это не состояние новеллы, поэтому их нельзя редактировать через
         # save_setup_files/save_novella_turn и нет смысла копировать в /data.
         parts = []
