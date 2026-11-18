@@ -49,6 +49,21 @@ class TestStore(unittest.TestCase):
             for index in range(packet["count"])
         )
 
+    def test_setup_report_requires_reader_approval(self):
+        edit = self.store.update_setup(
+            self.id, 0, {"pov.md": "Имя: не задано"}
+        )
+        report = self.store.setup_report(self.id)
+        self.assertFalse(report["ready_without_approval"])
+        self.assertTrue(report["unresolved_fields"])
+        with self.assertRaises(StateError):
+            self.store.activate(self.id, edit["version"])
+        self.assertEqual(self.store.read_state(self.id)["status"], "setup")
+        approved = self.store.activate(
+            self.id, edit["version"], reader_approved_gaps=True
+        )
+        self.assertEqual(approved["status"], "ready")
+
     def test_original_immutable_and_independent_sessions(self):
         self.assertEqual(self.store.read_original(self.id), "Исходник 1:1\n")
         other = self.store.create_session("Другой", "Канон", "POV")
