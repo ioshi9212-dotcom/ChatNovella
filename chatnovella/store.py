@@ -231,12 +231,53 @@ class SessionStore:
                 raise StateError("Версия устарела; перечитайте состояние")
             return self._write_revision(root, prior, files)
 
-    def activate(self, session_id: str, expected_version: int) -> dict[str, Any]:
+    def setup_report(self, session_id: str) -> dict[str, Any]:
+        """Find missing files and unresolved fields without inventing them."""
+        root = self._root(session_id)
+        meta = self._current(root)
+        rev = self._revision(root, meta["version"])
+        missing = []
+        unresolved = []
+        for name in ("novel.md", "pov.md", "state/scene.md", "state/locations.md"):
+            p = rev / name
+            if not p.is_file() or not p.read_text(encoding="utf-8").strip():
+                missing.append(name)
+        chars = rev / "characters"
+        if chars.exists():
+            for npc in sorted(chars.glob("NPC_*")):
+                if not npc.is_dir():
+                    continue
+                for name in (
+                    "core.md", "appearance.md", "voice.md", "personality.md",
+                    "past.md", "knowledge.md", "relations.md",
+                ):
+                    p = npc / name
+                    if not p.is_file():
+                        missing.append(str(p.relative_to(rev)))
+        candidates = [rev / "novel.md", rev / "pov.md", rev / "state/scene.md"]
+        if chars.exists():
+            candidates += list(chars.glob("NPC_*/*.md"))
+        for p in candidates:
+            if not p.is_file():
+                continue
+            for line in p.read_text(encoding="utf-8").splitlines():
+                if "не задано" in line.lower() or ("[" in line and "]" in line):
+                    unresolved.append(f"{p.relative_to(rev)}: {line.strip()[:130]}")
+        return {
+            "session_id": session_id, "version": meta["version"],
+            "missing_files": missing, "unresolved_fields": unresolved,
+            "ready_without_approval": not missing and not unresolved,
+        }
+
+    def activate(self, session_id: str, expected_version: int, reader_approved_gaps: bool = False) -> dict[str, Any]:
         root = self._root(session_id)
         with self._locked(root):
             prior = self._current(root)
             if prior["status"] != "setup" or prior["version"] != expected_version:
                 raise StateError("Сессия уже запущена или версия устарела")
+            report = self.setup_report(session_id)
+            if not report["ready_without_approval"] and not reader_approved_gaps:
+                raise StateError("Сначала согласуйте пропуски с читателем; вызовите get_setup_report")
             return self._write_revision(root, prior, {}, status="ready")
 
     def commit_turn(
