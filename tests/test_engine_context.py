@@ -48,6 +48,8 @@ class TestEngineContext(unittest.TestCase):
     def test_all_rules_and_skin_before_canon_every_scene(self):
         packet = self.store.prepare_turn(self.sid, [])
         self.assertEqual(packet["engine_files"], list(ENGINE_CONTEXT_FILES))
+        self.assertEqual(len(ENGINE_CONTEXT_FILES), 7)
+        self.assertTrue(all(name.startswith("engine/") for name in ENGINE_CONTEXT_FILES))
         full = self.unpack(packet)
         self.assertNotIn("RAW_ORIGINAL", full)
         locations = [
@@ -66,7 +68,7 @@ class TestEngineContext(unittest.TestCase):
 
     def test_engine_read_fresh_every_turn_no_session_copy(self):
         first = self.unpack(self.store.prepare_turn(self.sid, []))
-        path = self.engine / "skin/skin_builder.md"
+        path = self.engine / "engine/skin_builder.md"
         path.write_text("NEW_SKIN_VERSION_2", encoding="utf-8")
         second = self.unpack(self.store.prepare_turn(self.sid, []))
         self.assertNotIn("NEW_SKIN_VERSION_2", first)
@@ -84,7 +86,7 @@ class TestEngineContext(unittest.TestCase):
         with self.assertRaises(StateError):
             self.store.commit_turn(
                 self.sid, self.ready["version"], "Действие", "Сцена",
-                {"state/scene.md": "Сидит", "skin/skin_builder.md": "Подмена"}
+                {"state/scene.md": "Сидит", "engine/skin_builder.md": "Подмена"}
             )
 
     def test_required_rule_absent_fails_closed(self):
@@ -94,7 +96,7 @@ class TestEngineContext(unittest.TestCase):
 
     def test_large_engine_module_transmitted_without_loss(self):
         huge = "У" * (CHUNK_SIZE * 2 + 15)
-        path = self.engine / "runtimes/director.md"
+        path = self.engine / "engine/director.md"
         path.write_text(huge, encoding="utf-8")
         packet = self.store.prepare_turn(self.sid, [])
         self.assertGreaterEqual(packet["count"], 3)
