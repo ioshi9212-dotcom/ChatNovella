@@ -70,9 +70,16 @@ def save_setup_files(
 
 
 @mcp.tool()
-def finish_setup(session_id: str, expected_version: int) -> dict[str, Any]:
+def get_setup_report(session_id: str) -> dict[str, Any]:
+    """List gaps in setup. Ask the reader: fill herself, invent with consent, or skip."""
+    return store.setup_report(session_id)
+
+
+@mcp.tool()
+def finish_setup(session_id: str, expected_version: int,
+                 reader_approved_gaps: bool = False) -> dict[str, Any]:
     """After checks and gap decisions mark ready; wait for launch command."""
-    return store.activate(session_id, expected_version)
+    return store.activate(session_id, expected_version, reader_approved_gaps)
 
 
 @mcp.tool()
