@@ -178,6 +178,7 @@ def review_novella_scene(
     narration: str, files: dict[str, str], timeline_events: list[str],
     packet_id: str, checks: dict[str, dict[str, str]],
     relationship_labels: dict[str, str], timeline_no_change_reason: str = "",
+    scorecard: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Review the complete UNPUBLISHED draft before save; does not add a turn.
 
@@ -208,7 +209,7 @@ def review_novella_scene(
     return store.review_scene(
         session_id, expected_version, reader_text, narration, files,
         timeline_events, packet_id, checks, relationship_labels,
-        timeline_no_change_reason,
+        timeline_no_change_reason, scorecard,
     )
 
 
