@@ -80,6 +80,39 @@ class TestSceneReview(unittest.TestCase):
         self.assertIn("NPC_001", whole)
         self.assertIn("Подтверждённый персонаж Сайлас", whole)
 
+    def test_server_blocks_self_approved_unprompted_rina_embrace(self):
+        payload = self.payload()
+        payload["narration"] = scene(
+            "Рина уже была рядом. Она коснулась его настоящей тёплой руки "
+            "и обняла Эдриана."
+        )
+        refused = self.review(payload)
+        self.assertFalse(refused["approved"])
+        self.assertIsNone(refused["review_id"])
+        self.assertEqual(refused["quality_score"]["total"], 12)
+        self.assertTrue(refused["quality_score"]["critical"])
+        self.assertTrue(any("обняла" in issue for issue in refused["issues"]))
+        with self.assertRaises(StateError):
+            self.store.commit_turn(**payload, review_id=refused["review_id"])
+
+    def test_server_accepts_embrace_explicitly_chosen_by_reader(self):
+        payload = self.payload()
+        payload["reader_text"] = "(Вернуться и обнять Эдриана)"
+        self.preflight(payload["reader_text"])
+        payload["narration"] = scene(
+            "Рина уже была рядом. Она коснулась его настоящей тёплой руки "
+            "и обняла Эдриана."
+        )
+        card = scorecard(payload["reader_text"])
+        card["pov_actions"] = [{
+            "scene_quote": "Она коснулась его настоящей тёплой руки и обняла Эдриана.",
+            "source": "reader",
+            "source_quote": "обнять Эдриана",
+            "reason": "Читатель прямо указал Ринате самой обнять Эдриана при возвращении.",
+        }]
+        result = self.review(payload, card=card)
+        self.assertTrue(result["approved"], result)
+
     def test_scorecard_is_mandatory_and_failing_score_blocks_save(self):
         payload = self.payload()
         missing = self.review(payload, card={})
