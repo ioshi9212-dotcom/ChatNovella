@@ -7,7 +7,7 @@ from pathlib import Path
 
 from chatnovella.scene_review import REVIEW_CHECKS, inspect_scene
 from chatnovella.store import CHAR_FILES, STATE_FILES, SessionStore, StateError
-from review_helpers import checks, scene, fake_semantic_reviewer, relationship_report
+from review_helpers import checks, scene, relationship_report
 
 
 class TestSceneReview(unittest.TestCase):
@@ -21,7 +21,7 @@ class TestSceneReview(unittest.TestCase):
             file.parent.mkdir(parents=True, exist_ok=True)
             file.write_text("Начальное состояние", encoding="utf-8")
         self.template = template
-        self.store = SessionStore(self.base / "data", template, semantic_reviewer=fake_semantic_reviewer)
+        self.store = SessionStore(self.base / "data", template)
         meta = self.store.create_session("Оригинал дословно\n", "Канон", "Рината")
         self.sid = meta["session_id"]
         self.meta = self.store.activate(self.sid, meta["version"], True)
@@ -79,40 +79,6 @@ class TestSceneReview(unittest.TestCase):
         self.assertIn("NPC_001", whole)
         self.assertIn("Подтверждённый персонаж Сайлас", whole)
 
-    def test_server_semantic_failure_blocks_and_rewrite_can_pass(self):
-        payload = self.payload()
-        def reject(context):
-            result = fake_semantic_reviewer(context)
-            result["findings"]["plot_progress"] = {
-                "status": "fail",
-                "evidence": "Сцена не развивается за пределами действий, заданных читателем.",
-                "fix": "Добавить мотивированное событие мира и реальную зацепку.",
-            }
-            return result
-        self.store.semantic_reviewer = reject
-        failed = self.review(payload)
-        self.assertFalse(failed["approved"])
-        self.assertTrue(any("semantic.plot_progress" in issue for issue in failed["issues"]))
-        self.assertIsNone(failed["review_id"])
-        self.store.semantic_reviewer = fake_semantic_reviewer
-        payload["narration"] = scene("Рината замечает новый след у двери.")
-        passed = self.review(payload)
-        self.assertTrue(passed["approved"], passed)
-        self.assertEqual(passed["correction_pass"], 1)
-
-    def test_missing_independent_reviewer_fails_closed(self):
-        from chatnovella.semantic_review import ReviewUnavailable
-        payload = self.payload()
-        def unavailable(context):
-            raise ReviewUnavailable("Сервер не может проверить смысл")
-        self.store.semantic_reviewer = unavailable
-        with self.assertRaisesRegex(ReviewUnavailable, "не может проверить"):
-            self.review(payload)
-        self.store.semantic_reviewer = fake_semantic_reviewer
-        result = self.review(payload)
-        self.assertEqual(result["correction_pass"], 0)
-        self.assertTrue(result["approved"])
-
     def test_save_requires_approval_for_exact_text_files_chronology_and_packet(self):
         payload = self.payload()
         before = self.store.read_state(self.sid)
@@ -144,39 +110,41 @@ class TestSceneReview(unittest.TestCase):
         self.assertEqual(set(entry["scene_review"]["checks"]), set(REVIEW_CHECKS))
         self.assertEqual(self.store.read_original(self.sid), "Оригинал дословно\n")
 
-    def test_initial_draft_and_multiple_corrections_can_succeed(self):
+    def test_initial_draft_plus_two_corrections_can_succeed(self):
         payload = self.payload()
         payload["narration"] = scene().replace("📖", "Книга", 1)
         first = self.review(payload)
         self.assertFalse(first["approved"])
-        self.assertEqual(first["correction_pass"], 0)
+        self.assertEqual((first["correction_pass"], first["corrections_remaining"]), (0, 2))
         payload["narration"] = scene().replace("- Проверить дверь\n", "")
         second = self.review(payload)
         self.assertFalse(second["approved"])
-        self.assertEqual(second["correction_pass"], 1)
+        self.assertEqual((second["correction_pass"], second["corrections_remaining"]), (1, 1))
         payload["narration"] = scene()
         third = self.review(payload)
         self.assertTrue(third["approved"], third)
-        self.assertEqual(third["correction_pass"], 2)
+        self.assertEqual((third["correction_pass"], third["corrections_remaining"]), (2, 0))
         self.assertEqual(self.store.read_state(self.sid)["turn"], 0)
         saved = self.store.commit_turn(**payload, review_id=third["review_id"])
         self.assertEqual(saved["turn"], 1)
 
-    def test_revisions_survive_restart_and_have_no_small_limit(self):
+    def test_budget_survives_packet_refresh_restart_and_retries(self):
         payload = self.payload()
         for attempt in range(3):
             payload["narration"] = scene(f"Проверочный черновик {attempt}").replace("📖", "Книга", 1)
             result = self.review(payload)
             self.assertEqual(result["correction_pass"], attempt)
             self.assertEqual(self.review(payload), result)
-        self.assertFalse(result["blocked"])
-        self.store = SessionStore(self.base / "data", self.template, semantic_reviewer=fake_semantic_reviewer)
+        self.assertTrue(result["blocked"])
+        self.store = SessionStore(self.base / "data", self.template)
         fresh = self.payload()
-        fresh["narration"] = scene("Рината нашла ключ рядом с дверью.")
-        approved = self.review(fresh)
-        self.assertTrue(approved["approved"], approved)
-        self.assertEqual(approved["correction_pass"], 3)
+        blocked = self.review(fresh)
+        self.assertFalse(blocked["approved"])
+        self.assertTrue(blocked["blocked"])
+        self.assertIsNone(blocked["review_id"])
+        self.assertEqual(blocked["corrections_remaining"], 0)
         self.assertEqual(self.store.read_state(self.sid), self.meta)
+        # An actual new reader message allows a new cycle; packet refresh alone did not.
         fresh["reader_text"] = "(Проверить окно вместо осмотра зала)"
         self.preflight(fresh["reader_text"])
         allowed = self.review(fresh)
