@@ -41,10 +41,10 @@ class TestMCPTransport(unittest.TestCase):
             response = self.post(client, "tools/list")
             self.assertEqual(response.status_code, 200, response.text)
             tools = {tool["name"] for tool in response.json()["result"]["tools"]}
-            self.assertEqual(len(tools), 15)
+            self.assertEqual(len(tools), 16)
             self.assertTrue({"prepare_novella_turn", "read_novella_chunk",
                              "save_novella_turn", "repair_novella_timeline",
-                             "initialize_novella_relationship_metrics", "review_novella_scene"} <= tools)
+                             "initialize_novella_relationship_metrics", "review_novella_scene", "plan_novella_scene"} <= tools)
             response = self.post(client, "tools/call", {
                 "name": "list_novella_sessions", "arguments": {},
             })
@@ -71,6 +71,19 @@ class TestMCPTransport(unittest.TestCase):
             self.assertIn("engine/scene_review.md", packet["engine_files"])
             for index in range(packet["count"]):
                 call("read_novella_chunk", {"packet_id": packet["packet_id"], "index": index})
+            planned = call("plan_novella_scene", {
+                "session_id": meta["session_id"], "expected_version": meta["version"],
+                "reader_text": "(Оглядеться)", "packet_id": packet["packet_id"],
+                "plan": {
+                    "basis": "Рината осматривает читальный зал, персонажей поблизости нет",
+                    "active_arcs": [], "candidate_npcs": [],
+                    "time_span": "Короткая сцена, значимого перехода времени нет",
+                    "npc_initiative": "Нет доступных действующих NPC, движение возможно через обстановку",
+                    "intended_shift": "В читальном зале происходит новый видимый сдвиг",
+                    "possible_hook": "Заметный след у порога создаёт повод для продолжения",
+                },
+            })
+            self.assertTrue(planned["planned"])
             payload = {
                 "session_id": meta["session_id"], "expected_version": meta["version"],
                 "packet_id": packet["packet_id"], "reader_text": "(Оглядеться)",
