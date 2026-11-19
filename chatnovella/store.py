@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from chatnovella.scene_review import MAX_CORRECTIONS, REVIEW_CHECKS, inspect_scene
+from chatnovella.quality_scorecard import check_scorecard, QUALITY_AXES, MIN_SCORE
 
 STATE_FILES = (
     "state/scene.md", "state/locations.md", "state/roster.md",
@@ -638,8 +639,9 @@ class SessionStore:
         narration: str, files: dict[str, str], timeline_events: list[str],
         packet_id: str, checks: dict[str, Any],
         relationship_labels: dict[str, str], timeline_no_change_reason: str = "",
+        scorecard: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Check one original draft plus at most two revised submissions."""
+        """Review a complete unpublished draft, including the evidence scorecard."""
         if not isinstance(reader_text, str) or not isinstance(narration, str):
             raise StateError("Нужен дословный ввод читателя и полный текст сцены")
         if len(reader_text) > MAX_INPUT_FILE or len(narration) > MAX_INPUT_FILE:
@@ -647,7 +649,8 @@ class SessionStore:
         payload = _turn_payload(reader_text, narration, files, timeline_events,
                                 timeline_no_change_reason, packet_id)
         request_hash = _digest({"payload": payload, "checks": checks,
-                                "relationship_labels": relationship_labels})
+                                "relationship_labels": relationship_labels,
+                                "scorecard": scorecard})
         root = self._root(session_id)
         with self._locked(root):
             meta = self._current(root)
@@ -680,6 +683,10 @@ class SessionStore:
                                *attempts[-1]["result"]["issues"]],
                 }
             issues, footer = inspect_scene(narration, checks, relationship_labels)
+            # The server computes the total and checks literal proof in the
+            # unpublished artistic body; a claimed pass cannot bypass it.
+            quality_issues, quality = check_scorecard(scorecard, narration, reader_text)
+            issues.extend(quality_issues)
             rev = self._revision(root, expected_version)
             try:
                 _validate_turn_payload(payload)
@@ -745,11 +752,12 @@ class SessionStore:
                 "corrections_remaining": MAX_CORRECTIONS - correction,
                 "blocked": bool(issues) and correction == MAX_CORRECTIONS,
                 "issues": issues,
+                "quality_score": quality,
             }
             attempts.append({
                 "request_hash": request_hash, "payload_hash": _digest(payload),
                 "checks": checks, "relationship_labels": relationship_labels,
-                "result": result,
+                "scorecard": scorecard, "result": result,
             })
             _atomic_write(path, _json_dumps(ledger))
             return result
@@ -766,8 +774,11 @@ class SessionStore:
         if (not review["result"]["approved"] or review["result"]["review_id"] != review_id
                 or review["payload_hash"] != _digest(payload)):
             raise StateError("Проверка не одобрила этот точный текст и изменения; не подменяйте сцену после проверки")
+        if review.get("scorecard") is None or review["result"].get("quality_score", {}).get("total", 0) < MIN_SCORE:
+            raise StateError("Нет обязательной оценки качества сцены, подтверждённой сервером")
         return {"review_id": review_id, "correction_pass": review["result"]["correction_pass"],
-                "checks": review["checks"], "relationship_labels": review["relationship_labels"]}
+                "checks": review["checks"], "relationship_labels": review["relationship_labels"],
+                "scorecard": review["scorecard"], "quality_score": review["result"]["quality_score"]}
 
     def commit_turn(
         self, session_id: str, expected_version: int, reader_text: str,
@@ -1094,8 +1105,11 @@ class SessionStore:
         })
         packet["pre_save_review"] = (
             "Примените engine/scene_review.md к готовому черновику и вызовите "
-            "review_novella_scene с восемью конкретными результатами. Исходный "
-            "черновик + максимум две правки; новый пакет не сбрасывает лимит. "
+            "review_novella_scene с восемью проверками и обязательным scorecard "
+            "(шесть оценок 0–2, подтверждённые цитатами, критические ошибки, "
+            "проверка замыливания/затемнения, сопоставление ввода). "
+            "Сервер считает сумму сам: минимум 11/12 без критических дефектов. "
+            "Исходный черновик + максимум пять правок; новый пакет не сбрасывает лимит. "
             "В checks.npc.relationships передайте JSON-строку с changed/unchanged "
             "и reason для каждого карточного NPC и изменяемых relations.md; "
             "у эпизодических NPC без карточки числовых отношений нет. "
@@ -1103,6 +1117,7 @@ class SessionStore:
             "файлы и хронологию. Затем опубликуйте сохранённый текст без отчёта."
         )
         packet["scene_review"] = {"tool": "review_novella_scene", "checks": list(REVIEW_CHECKS),
+                                  "score_axes": list(QUALITY_AXES), "minimum_quality_score": MIN_SCORE,
                                   "max_corrections": MAX_CORRECTIONS}
         return packet
 
