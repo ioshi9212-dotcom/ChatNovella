@@ -40,7 +40,12 @@ class TestMCPTransport(unittest.TestCase):
             self.assertIn("Skin Builder", result["instructions"])
             response = self.post(client, "tools/list")
             self.assertEqual(response.status_code, 200, response.text)
-            tools = {tool["name"] for tool in response.json()["result"]["tools"]}
+            definitions = {tool["name"]: tool for tool in response.json()["result"]["tools"]}
+            tools = set(definitions)
+            review_schema = definitions["review_novella_scene"]["inputSchema"]
+            self.assertIn("scorecard", review_schema["properties"])
+            self.assertTrue(any(option.get("type") == "object" for option in
+                                review_schema["properties"]["scorecard"]["anyOf"]))
             self.assertEqual(len(tools), 16)
             self.assertTrue({"prepare_novella_turn", "read_novella_chunk",
                              "save_novella_turn", "repair_novella_timeline",

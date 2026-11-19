@@ -200,7 +200,7 @@ def review_novella_scene(
     Server checks header, 3x3 options, footer and exact saved relation numbers.
     Pass exact intended save arguments, including files and chronology.
 
-    scorecard is mandatory on this feature branch. It has axes for
+    scorecard is mandatory. It has axes for
     pov_autonomy, npc_character_initiative, plot_initiative, pacing,
     genre_detail and no_blurring_or_fade, each with score (0-2), an exact
     narrative quote, basis, issue and fix. It also has critical declarations,
