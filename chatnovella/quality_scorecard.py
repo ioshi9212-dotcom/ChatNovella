@@ -95,6 +95,11 @@ def check_scorecard(
             issues.append(f"scorecard.{key}: нужна дословная цитата 18–280 символов из художественной части, не из вариантов")
         else:
             quotes.append(_normalize(quote))
+            if key == "plot_initiative" and _normalize(quote) in reader:
+                issues.append(
+                    "scorecard.plot_initiative: событие полностью процитировано из ввода читателя; "
+                    "нужен самостоятельный поступок NPC или сдвиг мира"
+                )
         if not isinstance(basis, str) or not 35 <= len(basis.strip()) <= 650:
             issues.append(f"scorecard.{key}: объясни на конкретном событии/каноне (35–650 символов)")
         if not isinstance(defect, str) or not isinstance(fix, str):
@@ -132,7 +137,9 @@ def check_scorecard(
     }:
         issues.append("scorecard.reader_trace: сопоставь буквальный ввод читателя с его воплощением в сцене")
     else:
-        inp, observed, why = trace.values()
+        inp, observed, why = (
+            trace["input_quote"], trace["scene_quote"], trace["explanation"]
+        )
         if (not isinstance(inp, str) or not 1 <= len(inp.strip()) <= 240
                 or _normalize(inp) not in reader):
             issues.append("scorecard.reader_trace: цитата ввода должна действительно быть во вводе читателя")
