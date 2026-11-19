@@ -118,7 +118,10 @@ def finish_setup(session_id: str, expected_version: int,
 def prepare_novella_turn(
     session_id: str, participants: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Read all eight engine/ instructions every turn, then session files.
+    """Read the three active engine instructions every turn, then session files.
+
+    rules.md covers mechanics, combined skin_builder.md covers ALL narrative
+    rules/formatting, scene_review.md covers the review/scorecard protocol.
 
     Static engine files always come first and are loaded fresh from the
     deployed Amvera app; they are never duplicated into session state.

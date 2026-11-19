@@ -46,11 +46,6 @@ DATE_HEADING = re.compile(r"^## (\d{2}\.\d{2}\.\d{4})\s*$")
 # Отправляются в начале КАЖДОГО игрового пакета, до состояния и анкет НПС.
 ENGINE_CONTEXT_FILES = (
     "engine/rules.md",
-    "engine/director.md",
-    "engine/npc_rules.md",
-    "engine/world_rules.md",
-    "engine/strict_prohibitions.md",
-    "engine/pov_autonomy.md",
     "engine/skin_builder.md",
     "engine/scene_review.md",
 )

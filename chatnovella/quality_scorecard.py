@@ -10,6 +10,7 @@ import re
 from typing import Any
 
 from chatnovella.pov_provenance import validate_pov_provenance
+from chatnovella.scene_review import plain, scene_lines
 
 QUALITY_AXES = (
     "pov_autonomy",
@@ -48,12 +49,14 @@ def _normalize(value: str) -> str:
 
 def narrative_body(narration: str) -> str:
     """Only artistic prose, excluding header and post-scene choice lists."""
-    lines = narration.splitlines()
+    lines = scene_lines(narration)
     index = next((i for i, line in enumerate(lines)
-                  if line.strip().replace("**", "") == "Что я могу сделать:"), -1)
+                  if plain(line) == "Что я могу сделать:"), -1)
     if index < 0:
         return ""
-    return "\n".join(lines[5:index])
+    header_end = next((i + 1 for i, line in enumerate(lines[:index])
+                       if plain(line).startswith("👤")), 5)
+    return "\n".join(lines[header_end:index])
 
 
 

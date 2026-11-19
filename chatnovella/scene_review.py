@@ -16,7 +16,19 @@ OPTION_HEADINGS = (
 
 
 def plain(line: str) -> str:
-    return re.sub(r"^#{1,6}\s+", "", line.strip()).replace("**", "").strip()
+    text = re.sub(r"^#{1,6}\s+", "", line.strip()).replace("**", "").strip()
+    return re.sub(r"^🔸\s*(?=Что я могу (?:сделать|сказать|подумать):)", "", text)
+
+
+def scene_lines(narration: str) -> list[str]:
+    """Normalize the combined weather/scene row for checks, never for saving."""
+    lines = narration.splitlines()
+    for index, line in enumerate(lines):
+        if plain(line).startswith("📌") and "🎬" in line:
+            weather, current = line.split("🎬", 1)
+            lines[index:index + 1] = [weather.rstrip(), "🎬 " + current.lstrip()]
+            break
+    return lines
 
 
 def inspect_scene(
@@ -56,7 +68,7 @@ def inspect_scene(
         if len(evidence) != len(set(evidence)):
             issues.append("review.checks: одинаковые заверения вместо отдельных результатов проверки")
 
-    lines = [plain(line) for line in narration.splitlines() if line.strip()]
+    lines = [plain(line) for line in scene_lines(narration) if line.strip()]
     header = lines[:5]
     header_patterns = (
         r"📖\s*\S.+·\s*\S+.*",

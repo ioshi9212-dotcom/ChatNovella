@@ -273,6 +273,20 @@ class TestSceneReview(unittest.TestCase):
         issues, _ = inspect_scene(scene(), checks(), {})
         self.assertEqual(issues, [])
 
+    def test_combined_skin_header_and_decorated_choice_titles_are_valid(self):
+        from chatnovella.quality_scorecard import narrative_body
+        text = scene().replace("солнечно\n🎬", "солнечно 🎬", 1)
+        text = text.replace("\n👤", "\n\n👤", 1)
+        for label in ("Что я могу сделать:", "Что я могу сказать:", "Что я могу подумать:"):
+            text = text.replace(label, "🔸 " + label)
+        issues, _ = inspect_scene(text, checks(), {})
+        self.assertEqual(issues, [])
+        body = narrative_body(text)
+        self.assertIn("Рината оглядела зал.", body)
+        self.assertNotIn("Инвентарь:", body)
+        self.assertNotIn("Что я могу сделать:", body)
+        self.assertNotIn("Погода:", body)
+
     def test_direction_requires_specific_progress_and_hook_evidence(self):
         report = checks()
         report["direction"]["evidence"] = "Сцена получилась интересной, в конце есть варианты."

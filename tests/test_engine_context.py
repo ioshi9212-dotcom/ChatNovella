@@ -50,7 +50,9 @@ class TestEngineContext(unittest.TestCase):
     def test_all_rules_and_skin_before_canon_every_scene(self):
         packet = self.store.prepare_turn(self.sid, [])
         self.assertEqual(packet["engine_files"], list(ENGINE_CONTEXT_FILES))
-        self.assertEqual(len(ENGINE_CONTEXT_FILES), 8)
+        self.assertEqual(ENGINE_CONTEXT_FILES, (
+            "engine/rules.md", "engine/skin_builder.md", "engine/scene_review.md",
+        ))
         self.assertTrue(all(name.startswith("engine/") for name in ENGINE_CONTEXT_FILES))
         full = self.unpack(packet)
         self.assertNotIn("RAW_ORIGINAL", full)
@@ -102,13 +104,23 @@ class TestEngineContext(unittest.TestCase):
 
     def test_large_engine_module_transmitted_without_loss(self):
         huge = "У" * (CHUNK_SIZE * 2 + 15)
-        path = self.engine / "engine/director.md"
+        path = self.engine / "engine/skin_builder.md"
         path.write_text(huge, encoding="utf-8")
         packet = self.store.prepare_turn(self.sid, [])
         self.assertGreaterEqual(packet["count"], 3)
         full = self.unpack(packet)
         self.assertIn(huge, full)
         self.assertEqual(packet["total_characters"], len(full))
+
+    def test_disabled_rule_modules_are_never_sent_even_if_present(self):
+        disabled = ("director.md", "npc_rules.md", "world_rules.md",
+                    "strict_prohibitions.md", "pov_autonomy.md")
+        for name in disabled:
+            (self.engine / "engine" / name).write_text("DISABLED_RULE_POISON_" + name)
+        full = self.unpack(self.store.prepare_turn(self.sid, []))
+        self.assertNotIn("DISABLED_RULE_POISON_", full)
+        for name in disabled:
+            self.assertNotIn(f"===== FILE engine/{name} =====", full)
 
 
 if __name__ == "__main__":
