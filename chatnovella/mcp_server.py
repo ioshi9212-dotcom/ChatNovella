@@ -142,6 +142,34 @@ def read_novella_chunk(packet_id: str, index: int) -> dict[str, Any]:
 
 
 @mcp.tool()
+def plan_novella_scene(
+    session_id: str, expected_version: int, reader_text: str,
+    packet_id: str, plan: dict[str, Any],
+) -> dict[str, Any]:
+    """MANDATORY pre-writing planning gate: study ALL active arcs and NPCs first.
+
+    FIRST call prepare_novella_turn with participants=[] and read every chunk,
+    including the scout index of NPC cards. Then call this tool BEFORE writing
+    narration. Only AFTER planning choose physical/phone/observer participants,
+    request a new prepare_novella_turn packet, and read every chunk.
+
+    plan keys:
+      basis: scene situation and relevant existing context
+      active_arcs: IDs ARC_*/Q_* actually found in state/arcs.md, [] if none
+      candidate_npcs: IDs NPC_* considered, [] for a justified private pause
+      time_span: elapsed time and what can happen meanwhile
+      npc_initiative: motives, knowledge, opportunities and obstacles of NPCs
+      intended_shift: planned change of at least one situation/arc
+      possible_hook: how reader can naturally continue after the scene
+
+    Planning does not force a character, conflict, or supernatural event.
+    The reader controls POV. Server records preflight before review and will
+    reject a scene without it; meaning remains the model's responsibility.
+    """
+    return store.plan_scene(session_id, expected_version, reader_text, packet_id, plan)
+
+
+@mcp.tool()
 def review_novella_scene(
     session_id: str, expected_version: int, reader_text: str,
     narration: str, files: dict[str, str], timeline_events: list[str],
