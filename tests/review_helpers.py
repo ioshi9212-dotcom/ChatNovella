@@ -21,8 +21,14 @@ def scene(body="Рината оглядела зал.", relationships="нет у
 
 
 def checks():
-    return {key: {"status": "pass", "evidence": f"{key}: в проверочном тексте использованы данные тестового состояния."}
-            for key in REVIEW_CHECKS}
+    result = {key: {"status": "pass", "evidence": f"{key}: в проверочном тексте использованы данные тестового состояния."}
+              for key in REVIEW_CHECKS}
+    result["direction"]["evidence"] = (
+        "Опора: ситуация Ринаты в читальном зале; "
+        "Сдвиг: Рината осмотрела зал и обнаружила доступные пути; "
+        "Зацепка: у Ринаты осталось конкретное действие для продолжения сцены"
+    )
+    return result
 
 
 def reviewed_commit(store, session_id, expected_version, reader_text, narration,
