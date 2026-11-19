@@ -98,6 +98,11 @@ def validate_verdict(data: Any) -> dict[str, Any]:
         if not isinstance(finding, dict) or set(finding) != {"status", "evidence", "fix"}:
             raise ReviewUnavailable(f"Некорректный ответ проверяющего: {key}")
         status, evidence, fix = finding["status"], finding["evidence"], finding["fix"]
+        if status == "na" and key in (
+            "canon", "pov_presence", "plot_progress", "pacing",
+            "originality", "world_continuity",
+        ):
+            raise ReviewUnavailable(f"Обязательный критерий не может быть неприменимым: {key}")
         if status not in ("pass", "fail", "na") or not isinstance(evidence, str) or not 12 <= len(evidence.strip()) <= 1200:
             raise ReviewUnavailable(f"Некорректное обоснование проверяющего: {key}")
         if not isinstance(fix, str) or len(fix) > 1200 or (status == "fail" and len(fix.strip()) < 12):
