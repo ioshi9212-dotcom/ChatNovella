@@ -19,6 +19,9 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from chatnovella.scene_review import MAX_CORRECTIONS, REVIEW_CHECKS, inspect_scene
+from chatnovella.semantic_review import (
+    ReviewUnavailable, evaluate_semantic, validate_verdict as validate_semantic_verdict, SEMANTIC_KEYS,
+)
 
 STATE_FILES = (
     "state/scene.md", "state/locations.md", "state/roster.md",
@@ -270,7 +273,9 @@ class SessionStore:
     def __init__(
         self, data_root: str | Path, templates_root: str | Path,
         engine_root: str | Path | None = None,
+        semantic_reviewer: Any | None = None,
     ):
+        self.semantic_reviewer = semantic_reviewer or evaluate_semantic
         self.engine_root = (
             Path(engine_root).resolve()
             if engine_root is not None
@@ -584,6 +589,64 @@ class SessionStore:
             return {"planned": True, "plan_id": _digest(record)[:32],
                     "candidate_npcs": npcs, "active_arcs": arcs}
 
+    def _independent_scene_context(
+        self, rev: Path, packet: dict[str, Any], plan: dict[str, Any],
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Assemble original source documents server-side; the writer cannot forge them."""
+        names = (
+            "novel.md", "pov.md", "state/arcs.md", "state/roster.md",
+            "state/scene.md", "state/locations.md", "state/items.md",
+            "state/recent.md", "state/timeline.md",
+        )
+        state = {
+            name: (rev / name).read_text(encoding="utf-8")
+            for name in names if (rev / name).is_file()
+        }
+        npc_ids = {
+            p["id"] for p in packet["participants"]
+            if p["mode"] in ("physical", "phone", "observer", "message")
+        } | set(plan["candidate_npcs"])
+        characters = {}
+        for npc_id in sorted(npc_ids):
+            folder = rev / "characters" / npc_id
+            if folder.is_dir():
+                characters[npc_id] = {
+                    name: (folder / name).read_text(encoding="utf-8")
+                    for name in CHAR_FILES if (folder / name).is_file()
+                }
+        scout = {}
+        for folder in sorted((rev / "characters").glob("NPC_*")):
+            path = folder / "core.md"
+            if path.is_file() and folder.name not in characters:
+                scout[folder.name] = path.read_text(encoding="utf-8")[:1400]
+        rules = {
+            name: (self.engine_root / name).read_text(encoding="utf-8")
+            for name in ENGINE_CONTEXT_FILES
+        }
+        journal = rev / "system/turns.jsonl"
+        recent_turns = []
+        if journal.is_file():
+            for line in journal.read_text(encoding="utf-8").splitlines()[-3:]:
+                item = json.loads(line)
+                recent_turns.append({
+                    "reader": item.get("reader", ""),
+                    "narration": item.get("narration", ""),
+                })
+        context = {
+            "rules": rules, "state": state, "characters": characters,
+            "other_npc_index": scout, "recent_turns": recent_turns,
+            "pre_scene_plan": plan, "participants": packet["participants"],
+            "reader_input": payload["reader_text"],
+            "draft_scene": payload["narration"],
+            "proposed_changes": payload["files"],
+            "timeline_events": payload["timeline_events"],
+            "timeline_no_change_reason": payload["timeline_no_change_reason"],
+        }
+        if len(json.dumps(context, ensure_ascii=False)) > 420_000:
+            raise ReviewUnavailable("Слишком большой контекст для независимой проверки; сократите объём карточек или истории")
+        return context
+
     def review_scene(
         self, session_id: str, expected_version: int, reader_text: str,
         narration: str, files: dict[str, str], timeline_events: list[str],
@@ -617,19 +680,8 @@ class SessionStore:
             attempts = ledger["attempts"]
             if attempts and attempts[-1]["request_hash"] == request_hash:
                 return attempts[-1]["result"]  # Network retries consume no pass.
-            if len(attempts) >= MAX_CORRECTIONS + 1:
-                instruction = (
-                    "Две правки исчерпаны. Можно сохранить только последнюю одобренную версию, без новых изменений."
-                    if attempts[-1]["result"]["approved"] else
-                    "Две правки исчерпаны. Не сохраняйте сцену; сообщите читателю оставшиеся нарушения."
-                )
-                return {
-                    "approved": False, "review_id": None,
-                    "correction_pass": MAX_CORRECTIONS, "corrections_remaining": 0,
-                    "blocked": True,
-                    "issues": [instruction + " Новый пакет не сбрасывает лимит.",
-                               *attempts[-1]["result"]["issues"]],
-                }
+            # A failed version can be revised and reviewed again; no arbitrary
+            # correction budget can force the user to accept a flawed scene.
             issues, footer = inspect_scene(narration, checks, relationship_labels)
             rev = self._revision(root, expected_version)
             try:
@@ -654,14 +706,30 @@ class SessionStore:
                         issues.append(f"skin.relationships: {npc_id}: нижняя строка должна содержать все сохранённые шкалы с точным итогом и дельтой этого хода")
                 except (StateError, OSError) as exc:
                     issues.append(f"skin.relationships: {npc_id}: {exc}")
+            independent = None
+            if not issues:
+                plan = json.loads(plan_path.read_text(encoding="utf-8"))["plan"]
+                context = self._independent_scene_context(rev, packet, plan, payload)
+                # ReviewUnavailable is fail-closed: no approval, no saved turn,
+                # and no revision attempt consumed during API outages.
+                independent = self.semantic_reviewer(context)
+                independent = validate_semantic_verdict(independent)
+                for key in SEMANTIC_KEYS:
+                    finding = independent["findings"][key]
+                    if finding["status"] == "fail":
+                        issues.append(
+                            f"semantic.{key}: {finding['evidence']} "
+                            f"Исправить: {finding['fix']}"
+                        )
             correction = len(attempts)
             result = {
                 "approved": not issues,
                 "review_id": secrets.token_hex(16) if not issues else None,
                 "correction_pass": correction,
-                "corrections_remaining": MAX_CORRECTIONS - correction,
-                "blocked": bool(issues) and correction == MAX_CORRECTIONS,
+                "corrections_remaining": None,
+                "blocked": False,
                 "issues": issues,
+                "independent_review": independent,
             }
             attempts.append({
                 "request_hash": request_hash, "payload_hash": _digest(payload),
@@ -683,8 +751,11 @@ class SessionStore:
         if (not review["result"]["approved"] or review["result"]["review_id"] != review_id
                 or review["payload_hash"] != _digest(payload)):
             raise StateError("Проверка не одобрила этот точный текст и изменения; не подменяйте сцену после проверки")
+        if not review["result"].get("independent_review"):
+            raise StateError("Нет обязательного независимого серверного заключения")
         return {"review_id": review_id, "correction_pass": review["result"]["correction_pass"],
-                "checks": review["checks"], "relationship_labels": review["relationship_labels"]}
+                "checks": review["checks"], "relationship_labels": review["relationship_labels"],
+                "independent_review": review["result"]["independent_review"]}
 
     def commit_turn(
         self, session_id: str, expected_version: int, reader_text: str,
