@@ -2,7 +2,6 @@
 import json
 import re
 from chatnovella.scene_review import REVIEW_CHECKS
-from chatnovella.semantic_review import SEMANTIC_KEYS
 from chatnovella.store import StateError
 
 
@@ -34,24 +33,6 @@ def checks():
     )
     return result
 
-
-
-
-def fake_semantic_reviewer(context):
-    """TEST ONLY: deterministic independent-review substitute, never used by app."""
-    assert "draft_scene" in context and "state" in context and "rules" in context
-    return {
-        "summary": "Тестовый отчёт о соответствии черновика без реального модельного вызова.",
-        "findings": {
-            key: {
-                "status": "na" if key in ("scene_depth",) else "pass",
-                "evidence": ("Нет поцелуев, хоррора или экшена, требующих иной детализации."
-                             if key == "scene_depth" else
-                             f"В тестовом черновике проверен пункт {key} по реальным файлам"),
-                "fix": "",
-            } for key in SEMANTIC_KEYS
-        },
-    }
 
 def relationship_report(report, labels, files):
     """Fill storage fixtures; relationship tests supply their own decisions."""
@@ -87,7 +68,6 @@ def reviewed_commit(store, session_id, expected_version, reader_text, narration,
         "intended_shift": "Рината обнаруживает новое обстоятельство внутри зала",
         "possible_hook": "Свежий след у порога даёт непосредственное продолжение",
     })
-    store.semantic_reviewer = fake_semantic_reviewer
     report = relationship_report(checks(), relationship_labels or {}, files)
     result = store.review_scene(**payload, checks=report, relationship_labels=relationship_labels or {})
     if not result["approved"]:
