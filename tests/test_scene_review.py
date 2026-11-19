@@ -277,8 +277,10 @@ class TestSceneReview(unittest.TestCase):
         from chatnovella.quality_scorecard import narrative_body
         text = scene().replace("солнечно\n🎬", "солнечно 🎬", 1)
         text = text.replace("\n👤", "\n\n👤", 1)
-        for label in ("Что я могу сделать:", "Что я могу сказать:", "Что я могу подумать:"):
-            text = text.replace(label, "🔸 " + label)
+        text = text.replace("----------------------------------------", "\n***\n")
+        for emoji, label in zip(("🎭", "🔹", "🔸"),
+                                ("Что я могу сделать:", "Что я могу сказать:", "Что я могу подумать:")):
+            text = text.replace(label, emoji + " " + label)
         issues, _ = inspect_scene(text, checks(), {})
         self.assertEqual(issues, [])
         body = narrative_body(text)

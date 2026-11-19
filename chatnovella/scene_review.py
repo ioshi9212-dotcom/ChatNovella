@@ -42,7 +42,7 @@ def evidence_text(text: str) -> str:
 
 def plain(line: str) -> str:
     text = rendered_text(re.sub(r"^#{1,6}\s+", "", line.strip())).strip()
-    candidate = re.sub(r"^🔸\s*", "", text).strip("*_ ")
+    candidate = re.sub(r"^[🎭🔹🔸]\s*", "", text).strip("*_ ")
     candidate = " ".join(candidate.split()).casefold()
     for heading in (*OPTION_HEADINGS, "Состояние:", "Отношения:"):
         if candidate.rstrip(":? ") == heading[:-1].casefold():
