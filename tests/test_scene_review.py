@@ -26,7 +26,21 @@ class TestSceneReview(unittest.TestCase):
         self.sid = meta["session_id"]
         self.meta = self.store.activate(self.sid, meta["version"], True)
 
+    def preflight(self, reader_text="(Оглядеться)"):
+        scout = self.store.prepare_turn(self.sid, [])
+        for index in range(scout["count"]):
+            self.store.read_chunk(scout["packet_id"], index)
+        self.store.plan_scene(self.sid, self.meta["version"], reader_text, scout["packet_id"], {
+            "basis": "Рината находится в читальном зале и осматривается",
+            "active_arcs": [], "candidate_npcs": [],
+            "time_span": "Короткий промежуток времени без долгого ожидания",
+            "npc_initiative": "Появление NPC не требуется, окружение остаётся живым",
+            "intended_shift": "Рината замечает необычное происшествие в зале",
+            "possible_hook": "Обнаруженный след у порога допускает продолжение",
+        })
+
     def payload(self, participants=None):
+        self.preflight()
         packet = self.store.prepare_turn(self.sid, participants or [])
         for index in range(packet["count"]):
             self.store.read_chunk(packet["packet_id"], index)
@@ -109,6 +123,7 @@ class TestSceneReview(unittest.TestCase):
         self.assertEqual(self.store.read_state(self.sid), self.meta)
         # An actual new reader message allows a new cycle; packet refresh alone did not.
         fresh["reader_text"] = "(Проверить окно вместо осмотра зала)"
+        self.preflight(fresh["reader_text"])
         allowed = self.review(fresh)
         self.assertTrue(allowed["approved"], allowed)
         self.assertEqual(allowed["correction_pass"], 0)
@@ -170,9 +185,9 @@ class TestSceneReview(unittest.TestCase):
         self.assertTrue(any("review.direction" in issue for issue in issues))
 
         report["direction"]["evidence"] = (
-            "Опора: конфликт с Эдрианом; "
-            "Сдвиг: Эдриан приехал к парковке, теперь разговор возможен; "
-            "Зацепка: на экране появилось сообщение о его присутствии внизу"
+            "Опора: ситуация в читальном зале; "
+            "Сдвиг: В дальнем углу хлопнула дверь; "
+            "Зацепка: Рината заметила свежий след у порога"
         )
         issues, _ = inspect_scene(scene(), report, {})
         self.assertEqual(issues, [])
