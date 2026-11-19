@@ -204,7 +204,16 @@ def review_novella_scene(
     pov_autonomy, npc_character_initiative, plot_initiative, pacing,
     genre_detail and no_blurring_or_fade, each with score (0-2), an exact
     narrative quote, basis, issue and fix. It also has critical declarations,
-    reader_trace and fade_notes. Full protocol in engine/scene_review.md.
+    reader_trace, fade_notes and mandatory pov_actions. For every new
+    consequential POV embrace, kiss, attack, promise or confession, pov_actions
+    lists {"scene_quote":"exact narrative quote","source":"reader" or
+    "continued","source_quote":"exact reader or prior-state quote",
+    "reason":"why POV already chose the action"}. [] when none.
+    The server detects common high-risk Russian verbs and rejects unsupported
+    POV agency, even if author scored autonomy 2/2. Do NOT treat NPC hugs,
+    emotional shock or romantic closeness as authorization for POV decisions.
+    Routine speech, reflexes and gestures do not need this provenance.
+    Full protocol in engine/scene_review.md.
     Server recalculates total (at least 11/12), checks exact evidence quotes
     BEFORE the choices, blocks declared critical faults and unexplained
     obvious fade transitions. These checks do NOT provide an independent

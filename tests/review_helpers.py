@@ -86,6 +86,7 @@ def scorecard(reader_text="(Оглядеться)"):
             "explanation": "Ввод читателя отражён в действиях Ринаты при осмотре обстановки; сюжетная инициатива сохранена за миром.",
         },
         "fade_notes": [],
+        "pov_actions": [],
     }
 
 def reviewed_commit(store, session_id, expected_version, reader_text, narration,

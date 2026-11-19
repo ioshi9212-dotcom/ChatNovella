@@ -683,24 +683,28 @@ class SessionStore:
                                *attempts[-1]["result"]["issues"]],
                 }
             issues, footer = inspect_scene(narration, checks, relationship_labels)
-            # The server computes the total and checks literal proof in the
-            # unpublished artistic body; a claimed pass cannot bypass it.
-            quality_issues, quality = check_scorecard(scorecard, narration, reader_text)
-            issues.extend(quality_issues)
             rev = self._revision(root, expected_version)
             journal_path = rev / "system/turns.jsonl"
-            if journal_path.is_file():
-                recent_entries = [
-                    json.loads(line) for line in journal_path.read_text(encoding="utf-8").splitlines()[-3:]
-                    if line.strip()
-                ]
-                for reused in copied_prose(
-                    narration, [entry.get("narration", "") for entry in recent_entries]
-                ):
-                    issues.append(
-                        "scorecard.pacing: повторён крупный абзац из недавней сцены; "
-                        "не заменяй сюжет повторным текстом: " + reused
-                    )
+            recent_entries = [
+                json.loads(line) for line in journal_path.read_text(encoding="utf-8").splitlines()[-3:]
+                if line.strip()
+            ] if journal_path.is_file() else []
+            recent_prose = [entry.get("narration", "") for entry in recent_entries]
+            scene_state = rev / "state/scene.md"
+            prior_sources = recent_prose[-1:] + (
+                [scene_state.read_text(encoding="utf-8")] if scene_state.is_file() else []
+            )
+            # A new, consequential POV gesture needs a genuine reader or
+            # committed-scene source, never an invented self-authorization.
+            quality_issues, quality = check_scorecard(
+                scorecard, narration, reader_text, prior_sources,
+            )
+            issues.extend(quality_issues)
+            for reused in copied_prose(narration, recent_prose):
+                issues.append(
+                    "scorecard.pacing: повторён крупный абзац из недавней сцены; "
+                    "не заменяй сюжет повторным текстом: " + reused
+                )
             try:
                 _validate_turn_payload(payload)
                 _validate_relation_updates(rev, files)
