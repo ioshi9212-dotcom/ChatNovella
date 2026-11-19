@@ -1,7 +1,7 @@
 name: Check ChatNovella
 on:
   push:
-    branches: [main, feature/chatnovella-state-templates]
+    branches: [main, feature/chatnovella-state-templates, feature/scene-quality-scorecard]
   pull_request:
     branches: [main]
 

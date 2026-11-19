@@ -178,6 +178,7 @@ def review_novella_scene(
     narration: str, files: dict[str, str], timeline_events: list[str],
     packet_id: str, checks: dict[str, dict[str, str]],
     relationship_labels: dict[str, str], timeline_no_change_reason: str = "",
+    scorecard: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Review the complete UNPUBLISHED draft before save; does not add a turn.
 
@@ -199,16 +200,27 @@ def review_novella_scene(
     Server checks header, 3x3 options, footer and exact saved relation numbers.
     Pass exact intended save arguments, including files and chronology.
 
-    Initial draft is correction_pass=0, then at most TWO corrected submissions.
-    Fix all issues together. Same-request network retry is free; a new packet
-    does not reset the budget. If blocked, stop and state remaining issues.
-    Do not invent/alter reader_text to reset the limit. No flawed scene is saved.
+    scorecard is mandatory on this feature branch. It has axes for
+    pov_autonomy, npc_character_initiative, plot_initiative, pacing,
+    genre_detail and no_blurring_or_fade, each with score (0-2), an exact
+    narrative quote, basis, issue and fix. It also has critical declarations,
+    reader_trace and fade_notes. Full protocol in engine/scene_review.md.
+    Server recalculates total (at least 11/12), checks exact evidence quotes
+    BEFORE the choices, blocks declared critical faults and unexplained
+    obvious fade transitions. These checks do NOT provide an independent
+    semantic literary judgment; be truthful about the scores.
+
+    Initial draft is correction_pass=0, then at most FIVE corrections.
+    If approved=false, revise the unpublished full scene and submit again.
+    Same-request network retry is free; fetching a new packet cannot reset
+    the budget. If blocked, stop and state remaining issues.
+    Do not alter reader_text to reset the limit. No flawed scene is saved.
     approved=true returns review_id for save_novella_turn with identical inputs.
     """
     return store.review_scene(
         session_id, expected_version, reader_text, narration, files,
         timeline_events, packet_id, checks, relationship_labels,
-        timeline_no_change_reason,
+        timeline_no_change_reason, scorecard,
     )
 
 

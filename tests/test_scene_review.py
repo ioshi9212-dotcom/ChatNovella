@@ -7,7 +7,7 @@ from pathlib import Path
 
 from chatnovella.scene_review import REVIEW_CHECKS, inspect_scene
 from chatnovella.store import CHAR_FILES, STATE_FILES, SessionStore, StateError
-from review_helpers import checks, scene, relationship_report
+from review_helpers import checks, scene, relationship_report, scorecard
 
 
 class TestSceneReview(unittest.TestCase):
@@ -52,10 +52,11 @@ class TestSceneReview(unittest.TestCase):
             packet_id=packet["packet_id"],
         )
 
-    def review(self, payload, report=None, labels=None):
+    def review(self, payload, report=None, labels=None, card=None):
         report = relationship_report(report or checks(), labels or {}, payload["files"])
         return self.store.review_scene(**payload, checks=report,
-                                       relationship_labels=labels or {})
+                                       relationship_labels=labels or {},
+                                       scorecard=scorecard(payload["reader_text"]) if card is None else card)
 
     def test_review_rejects_missing_pre_scene_plan(self):
         packet = self.store.prepare_turn(self.sid, [])
@@ -78,6 +79,44 @@ class TestSceneReview(unittest.TestCase):
         self.assertIn("system/npc_scout", whole)
         self.assertIn("NPC_001", whole)
         self.assertIn("Подтверждённый персонаж Сайлас", whole)
+
+    def test_scorecard_is_mandatory_and_failing_score_blocks_save(self):
+        payload = self.payload()
+        missing = self.review(payload, card={})
+        self.assertFalse(missing["approved"])
+        self.assertTrue(any("scorecard" in item for item in missing["issues"]))
+        self.assertIsNone(missing["review_id"])
+
+        card = scorecard(payload["reader_text"])
+        for name in ("pacing", "genre_detail"):
+            card["axes"][name]["score"] = 1
+            card["axes"][name]["issue"] = "У значимого фрагмента недостаёт конкретики и внутреннего развития."
+            card["axes"][name]["fix"] = "Дополнить важные действия и убрать неоправданно растянутые фразы."
+        low = self.review(payload, card=card)
+        self.assertFalse(low["approved"])
+        self.assertEqual(low["quality_score"]["total"], 10)
+        with self.assertRaises(StateError):
+            self.store.commit_turn(**payload, review_id=low["review_id"])
+        high = self.review(payload)
+        self.assertTrue(high["approved"], high)
+        self.assertEqual(high["quality_score"]["total"], 12)
+        saved = self.store.commit_turn(**payload, review_id=high["review_id"])
+        self.assertEqual(saved["turn"], 1)
+
+    def test_fatal_scorecard_error_blocks_twelve_points_until_correction(self):
+        payload = self.payload()
+        card = scorecard(payload["reader_text"])
+        card["critical"]["unjustified_omission_or_fade"]["violation"] = True
+        card["critical"]["unjustified_omission_or_fade"]["reason"] = (
+            "При переписывании было затемнено важное действие в центре сцены."
+        )
+        failed = self.review(payload, card=card)
+        self.assertFalse(failed["approved"])
+        self.assertEqual(failed["quality_score"]["total"], 12)
+        self.assertTrue(failed["quality_score"]["critical"])
+        passed = self.review(payload)
+        self.assertTrue(passed["approved"], passed)
+        self.assertEqual(passed["correction_pass"], 1)
 
     def test_save_requires_approval_for_exact_text_files_chronology_and_packet(self):
         payload = self.payload()
@@ -115,22 +154,22 @@ class TestSceneReview(unittest.TestCase):
         payload["narration"] = scene().replace("📖", "Книга", 1)
         first = self.review(payload)
         self.assertFalse(first["approved"])
-        self.assertEqual((first["correction_pass"], first["corrections_remaining"]), (0, 2))
+        self.assertEqual((first["correction_pass"], first["corrections_remaining"]), (0, 5))
         payload["narration"] = scene().replace("- Проверить дверь\n", "")
         second = self.review(payload)
         self.assertFalse(second["approved"])
-        self.assertEqual((second["correction_pass"], second["corrections_remaining"]), (1, 1))
+        self.assertEqual((second["correction_pass"], second["corrections_remaining"]), (1, 4))
         payload["narration"] = scene()
         third = self.review(payload)
         self.assertTrue(third["approved"], third)
-        self.assertEqual((third["correction_pass"], third["corrections_remaining"]), (2, 0))
+        self.assertEqual((third["correction_pass"], third["corrections_remaining"]), (2, 3))
         self.assertEqual(self.store.read_state(self.sid)["turn"], 0)
         saved = self.store.commit_turn(**payload, review_id=third["review_id"])
         self.assertEqual(saved["turn"], 1)
 
     def test_budget_survives_packet_refresh_restart_and_retries(self):
         payload = self.payload()
-        for attempt in range(3):
+        for attempt in range(6):
             payload["narration"] = scene(f"Проверочный черновик {attempt}").replace("📖", "Книга", 1)
             result = self.review(payload)
             self.assertEqual(result["correction_pass"], attempt)
@@ -261,26 +300,26 @@ class TestSceneReview(unittest.TestCase):
         payload = self.payload([{"id": "NPC_001", "mode": "physical"}])
         labels = {"NPC_001": "Сайлас"}
         payload["narration"] = scene(relationships="Сайлас — интерес 50/0; доверие 30/0")
-        missing = self.store.review_scene(**payload, checks=checks(), relationship_labels=labels)
+        missing = self.store.review_scene(**payload, checks=checks(), relationship_labels=labels, scorecard=scorecard(payload["reader_text"]))
         self.assertFalse(missing["approved"])
         self.assertTrue(any("review.relationships" in issue for issue in missing["issues"]))
         report = checks()
         report["npc"]["relationships"] = json.dumps({"NPC_001": {"status": "changed", "reason": "У героя возник новый интерес после разговора."}}, ensure_ascii=False)
-        false_change = self.store.review_scene(**payload, checks=report, relationship_labels=labels)
+        false_change = self.store.review_scene(**payload, checks=report, relationship_labels=labels, scorecard=scorecard(payload["reader_text"]))
         self.assertFalse(false_change["approved"])
         self.assertTrue(any("не совпадает с дельтами" in issue for issue in false_change["issues"]))
         payload["files"]["characters/NPC_001/relations.md"] = "- интерес 52/+2\n- доверие 30/+0"
         payload["narration"] = scene(relationships="Сайлас — интерес 52/+2; доверие 30/0")
-        correct = self.store.review_scene(**payload, checks=report, relationship_labels=labels)
+        correct = self.store.review_scene(**payload, checks=report, relationship_labels=labels, scorecard=scorecard(payload["reader_text"]))
         self.assertTrue(correct["approved"], correct)
 
     def test_ephemeral_guard_gets_no_numeric_footer(self):
         payload = self.payload()
         payload["narration"] = scene("Охранник нахмурился и пропустил её.", "Охранник — раздражение 16/+1")
-        result = self.store.review_scene(**payload, checks=checks(), relationship_labels={"NPC_GUARD": "Охранник"})
+        result = self.store.review_scene(**payload, checks=checks(), relationship_labels={"NPC_GUARD": "Охранник"}, scorecard=scorecard(payload["reader_text"]))
         self.assertFalse(result["approved"])
         payload["narration"] = scene("Охранник нахмурился и пропустил её.")
-        correct = self.store.review_scene(**payload, checks=checks(), relationship_labels={})
+        correct = self.store.review_scene(**payload, checks=checks(), relationship_labels={}, scorecard=scorecard(payload["reader_text"]))
         self.assertTrue(correct["approved"], correct)
 
     def test_review_cannot_authorize_another_session(self):
