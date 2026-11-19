@@ -54,6 +54,23 @@ def narrative_body(narration: str) -> str:
     return "\n".join(lines[5:index])
 
 
+
+def copied_prose(narration: str, prior_narrations: list[str]) -> list[str]:
+    """Catch substantial exact paragraph recycling, not thematic similarity."""
+    body = narrative_body(narration)
+    paragraphs = [
+        _normalize(part) for part in re.split(r"\n\s*\n", body)
+        if len(_normalize(part)) >= 180
+    ]
+    previous = set()
+    for past in prior_narrations[-3:]:
+        previous.update(
+            _normalize(part) for part in re.split(r"\n\s*\n", narrative_body(past))
+            if len(_normalize(part)) >= 180
+        )
+    return [part[:95] for part in paragraphs if part in previous]
+
+
 def check_scorecard(
     card: Any, narration: str, reader_text: str,
 ) -> tuple[list[str], dict[str, Any]]:
