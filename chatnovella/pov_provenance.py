@@ -48,7 +48,7 @@ def _is_pov_actor(line: str, start: int, recent_pov: bool) -> bool:
         return True
     # "Она обняла" is treated as POV only when the immediately preceding
     # narration explicitly named Rina; otherwise it is too ambiguous.
-    return recent_pov or bool(_POV_NAME.search(clause))
+    return recent_pov or bool(_POV_NAME.search(head[max(0, at - 200):at + 1]))
 
 
 def detect_pov_decisions(body: str) -> list[dict[str, Any]]:
