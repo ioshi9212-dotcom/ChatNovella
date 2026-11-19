@@ -14,7 +14,12 @@ def scene(body="Рината оглядела зал.", relationships="нет у
         "👤 Рината 👕 Одежда, волосы: джинсы, хвост 🎒 Инвентарь: телефон\n"
         "----------------------------------------\n"
         + body + "\n\n"
-        "В дальнем углу хлопнула дверь. Рината заметила свежий след у порога.\n\n"
+        "В дальнем углу хлопнула дверь. Рината заметила свежий след у порога.\n"
+        "Рината остановилась у столика и прислушалась к коридору.\n"
+        "За стеллажом скрипнула тяжёлая дверь без видимого толчка.\n"
+        "На полу у порога лежала записка с сегодняшней датой.\n"
+        "В тусклом свете было видно, как дрожит край записки.\n"
+        "Тонкая полоска света медленно прошла по нижнему краю двери.\n\n"
         "Что я могу сделать:\n- Открыть окно\n- Подойти к столу\n- Проверить дверь\n"
         "Что я могу сказать:\n- Кто здесь?\n- Я подожду у двери.\n- Вы что-то потеряли?\n"
         "Что я могу подумать:\n- Здесь тихо.\n- Пора найти нужный стол.\n- Лучше осмотреть выход.\n"
@@ -47,6 +52,42 @@ def relationship_report(report, labels, files):
     return report
 
 
+
+def scorecard(reader_text="(Оглядеться)"):
+    """Deliberately concrete synthetic proof for test-only miniature scenes."""
+    quotes = {
+        "pov_autonomy": "Рината остановилась у столика и прислушалась к коридору.",
+        "npc_character_initiative": "За стеллажом скрипнула тяжёлая дверь без видимого толчка.",
+        "plot_initiative": "В дальнем углу хлопнула дверь.",
+        "pacing": "На полу у порога лежала записка с сегодняшней датой.",
+        "genre_detail": "В тусклом свете было видно, как дрожит край записки.",
+        "no_blurring_or_fade": "Рината заметила свежий след у порога.",
+    }
+    reasons = {
+        "pov_choice": "Действия из ввода читателя сохранены; принципиальные решения за Ринату не сделаны.",
+        "canon_and_knowledge": "В тестовой новелле отсутствуют тайные сведения или противоречащие её канону факты.",
+        "relationship_consistency": "Показатели отношений и список участников подтверждены сохранёнными тестовыми карточками.",
+        "unjustified_omission_or_fade": "Значимые события не обрываются на монтаже и не заменяются расплывчатыми эвфемизмами.",
+    }
+    return {
+        "axes": {
+            name: {"score": 2, "quote": quote,
+                   "basis": "Тестовая сцена содержит проверяемое событие: " + quote,
+                   "issue": "", "fix": ""}
+            for name, quote in quotes.items()
+        },
+        "critical": {
+            name: {"violation": False, "reason": reason}
+            for name, reason in reasons.items()
+        },
+        "reader_trace": {
+            "input_quote": reader_text,
+            "scene_quote": "Рината остановилась у столика и прислушалась к коридору.",
+            "explanation": "Ввод читателя отражён в действиях Ринаты при осмотре обстановки; сюжетная инициатива сохранена за миром.",
+        },
+        "fade_notes": [],
+    }
+
 def reviewed_commit(store, session_id, expected_version, reader_text, narration,
                     files, timeline_events=None, timeline_no_change_reason="",
                     packet_id=None, relationship_labels=None,
@@ -69,7 +110,9 @@ def reviewed_commit(store, session_id, expected_version, reader_text, narration,
         "possible_hook": "Свежий след у порога даёт непосредственное продолжение",
     })
     report = relationship_report(checks(), relationship_labels or {}, files)
-    result = store.review_scene(**payload, checks=report, relationship_labels=relationship_labels or {})
+    result = store.review_scene(**payload, checks=report,
+                                relationship_labels=relationship_labels or {},
+                                scorecard=scorecard(reader_text))
     if not result["approved"]:
         raise StateError("; ".join(result["issues"]))
     return store.commit_turn(**payload, review_id=result["review_id"])
