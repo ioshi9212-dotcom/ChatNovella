@@ -523,6 +523,65 @@ class SessionStore:
         # reader message starts a new cycle; do not invent one to bypass it.
         return root / "scene_reviews" / f"v{version:08d}" / f"{_digest(reader_text)}.json"
 
+    def _plan_path(self, root: Path, version: int, reader_text: str) -> Path:
+        return root / "scene_plans" / f"v{version:08d}" / f"{_digest(reader_text)}.json"
+
+    def plan_scene(
+        self, session_id: str, expected_version: int, reader_text: str,
+        packet_id: str, plan: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Persist an explicit world/arc scan BEFORE scene review and publication."""
+        if not isinstance(reader_text, str) or len(reader_text) > MAX_INPUT_FILE:
+            raise StateError("Нужен дословный ввод читателя для плана сцены")
+        required = {
+            "basis", "active_arcs", "candidate_npcs", "time_span",
+            "npc_initiative", "intended_shift", "possible_hook",
+        }
+        if not isinstance(plan, dict) or set(plan) != required:
+            raise StateError("План: нужны basis, active_arcs, candidate_npcs, time_span, npc_initiative, intended_shift, possible_hook")
+        for key in ("basis", "time_span", "npc_initiative", "intended_shift", "possible_hook"):
+            value = plan[key]
+            if not isinstance(value, str) or not 12 <= len(value.strip()) <= 750:
+                raise StateError(f"План: {key} должен содержать конкретное объяснение (12–750 символов)")
+        arcs, npcs = plan["active_arcs"], plan["candidate_npcs"]
+        if (not isinstance(arcs, list) or len(arcs) > 40
+                or any(not isinstance(x, str) or not re.fullmatch(r"(?:ARC|Q)_[A-Za-z0-9_-]+", x) for x in arcs)
+                or len(arcs) != len(set(arcs))):
+            raise StateError("План: active_arcs — список уникальных ID активных линий/вопросов")
+        if (not isinstance(npcs, list) or len(npcs) > 100
+                or any(not isinstance(x, str) or not re.fullmatch(r"NPC_[A-Za-z0-9_-]{1,60}", x) for x in npcs)
+                or len(npcs) != len(set(npcs))):
+            raise StateError("План: candidate_npcs — уникальные ID рассматриваемых NPC; пустой список допускается")
+        root = self._root(session_id)
+        with self._locked(root):
+            meta = self._current(root)
+            if (meta["version"] != expected_version or meta["status"] not in ("ready", "active")
+                    or meta["audit_15_due"] or meta["audit_60_due"]):
+                raise StateError("План: нужна актуальная активная сессия без ожидающих аудитов")
+            packet = self._require_complete_turn_packet(session_id, expected_version, packet_id)
+            if packet["participants"]:
+                raise StateError("Сначала изучите мир с prepare_novella_turn(participants=[]), затем выберите действующих NPC")
+            rev = self._revision(root, expected_version)
+            arcs_content = (rev / "state/arcs.md").read_text(encoding="utf-8")
+            for arc_id in arcs:
+                if not re.search(r"(?m)^##\\s+" + re.escape(arc_id) + r"\\b", arcs_content):
+                    raise StateError(f"План: нет существующей арки или вопроса {arc_id}")
+            for npc_id in npcs:
+                if not (rev / "characters" / npc_id / "core.md").is_file():
+                    raise StateError(f"План: нет существующей анкеты {npc_id}")
+            path = self._plan_path(root, expected_version, reader_text)
+            record = {
+                "version": expected_version, "reader_hash": _digest(reader_text),
+                "source_packet": packet_id, "plan": plan,
+            }
+            if path.is_file():
+                if json.loads(path.read_text(encoding="utf-8")) != record:
+                    raise StateError("План для этого ввода уже зафиксирован; нельзя переписывать его задним числом")
+            else:
+                _atomic_write(path, _json_dumps(record))
+            return {"planned": True, "plan_id": _digest(record)[:32],
+                    "candidate_npcs": npcs, "active_arcs": arcs}
+
     def review_scene(
         self, session_id: str, expected_version: int, reader_text: str,
         narration: str, files: dict[str, str], timeline_events: list[str],
@@ -546,6 +605,9 @@ class SessionStore:
             if meta["status"] not in ("ready", "active") or meta["audit_15_due"] or meta["audit_60_due"]:
                 raise StateError("Сначала завершите настройку или обязательный аудит")
             packet = self._require_complete_turn_packet(session_id, expected_version, packet_id)
+            plan_path = self._plan_path(root, expected_version, reader_text)
+            if not plan_path.is_file():
+                raise StateError("Перед review_novella_scene обязателен plan_novella_scene после изучения активного мира")
             if packet.get("review_contract") != 1:
                 raise StateError("Получите новый prepare_novella_turn с engine/scene_review.md и прочитайте все чанки")
             path = self._review_path(root, expected_version, reader_text)
@@ -848,6 +910,20 @@ class SessionStore:
         }
         if not isinstance(participants, list) or len(participants) > 100:
             raise StateError("Неверный список участников")
+        if not participants:
+            # Initial reconnaissance: all NPCs are considered before casting.
+            # Short card excerpts are context for planning, not scene participants.
+            index = []
+            for card in sorted((rev / "characters").glob("NPC_*/core.md"))[:100]:
+                npc = card.parent.name
+                fragments = []
+                for section in ("core.md", "personality.md", "relations.md"):
+                    f = card.parent / section
+                    if f.is_file():
+                        fragments.append(section + ": " + f.read_text(encoding="utf-8")[:450])
+                index.append(npc + "\\n" + "\\n".join(fragments))
+            if index:
+                names.append("system/npc_scout")  # added separately as generated packet text
         for info in participants:
             if not isinstance(info, dict):
                 raise StateError("Участник должен иметь ID и режим")
@@ -888,6 +964,8 @@ class SessionStore:
             file = rev / path
             if file.is_file():
                 parts.append((path, file.read_text(encoding="utf-8")))
+        if not participants and index:
+            parts.append(("system/npc_scout", "\\n\\n".join(index)))
         packet = self._packet(session_id, meta["version"], parts, participants=participants)
         packet["engine_files"] = list(ENGINE_CONTEXT_FILES)
         packet["pre_save_review"] = (
