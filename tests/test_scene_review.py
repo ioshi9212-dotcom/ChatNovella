@@ -56,6 +56,28 @@ class TestSceneReview(unittest.TestCase):
         return self.store.review_scene(**payload, checks=report or checks(),
                                        relationship_labels=labels or {})
 
+    def test_review_rejects_missing_pre_scene_plan(self):
+        packet = self.store.prepare_turn(self.sid, [])
+        for index in range(packet["count"]):
+            self.store.read_chunk(packet["packet_id"], index)
+        with self.assertRaisesRegex(StateError, "plan_novella_scene"):
+            self.store.review_scene(
+                session_id=self.sid, expected_version=self.meta["version"],
+                reader_text="(Посмотреть в окно)", narration=scene(),
+                files={"state/scene.md": "Рината изучила обстановку."},
+                timeline_events=[], timeline_no_change_reason="Нет значимого изменения",
+                packet_id=packet["packet_id"], checks=checks(), relationship_labels={},
+            )
+
+    def test_world_scout_includes_npc_before_participant_selection(self):
+        self.add_npc()
+        packet = self.store.prepare_turn(self.sid, [])
+        whole = "".join(self.store.read_chunk(packet["packet_id"], index)["text"]
+                        for index in range(packet["count"]))
+        self.assertIn("system/npc_scout", whole)
+        self.assertIn("NPC_001", whole)
+        self.assertIn("Подтверждённый персонаж Сайлас", whole)
+
     def test_save_requires_approval_for_exact_text_files_chronology_and_packet(self):
         payload = self.payload()
         before = self.store.read_state(self.sid)
