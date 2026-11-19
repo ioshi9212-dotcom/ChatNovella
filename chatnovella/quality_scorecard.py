@@ -9,6 +9,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from chatnovella.pov_provenance import validate_pov_provenance
+
 QUALITY_AXES = (
     "pov_autonomy",
     "npc_character_initiative",
@@ -73,6 +75,7 @@ def copied_prose(narration: str, prior_narrations: list[str]) -> list[str]:
 
 def check_scorecard(
     card: Any, narration: str, reader_text: str,
+    prior_sources: list[str] | None = None,
 ) -> tuple[list[str], dict[str, Any]]:
     """Inspect structured proof, returning issues and server-computed score.
 
@@ -84,9 +87,9 @@ def check_scorecard(
                               "maximum": MAX_SCORE, "critical": False,
                               "fade_cues": []}
     if not isinstance(card, dict) or set(card) != {
-        "axes", "critical", "reader_trace", "fade_notes"
+        "axes", "critical", "reader_trace", "fade_notes", "pov_actions"
     }:
-        return ["scorecard: нужны axes, critical, reader_trace, fade_notes"], report
+        return ["scorecard: нужны axes, critical, reader_trace, fade_notes и pov_actions"], report
     body = _normalize(narrative_body(narration))
     reader = _normalize(reader_text)
     axes = card["axes"]
@@ -202,6 +205,13 @@ def check_scorecard(
             if not any(_normalize(cue) in quote for quote in used):
                 issues.append(f"scorecard.fade: найден переход «{cue}»; обоснуй осмысленный монтаж либо признай затемнение и исправь")
 
+    pov_issues, detected = validate_pov_provenance(
+        card["pov_actions"], narrative_body(narration), reader_text, prior_sources,
+    )
+    issues.extend(pov_issues)
+    report["pov_consequential_actions"] = detected
+    if pov_issues:
+        report["critical"] = True
     if total < MIN_SCORE:
         issues.append(f"scorecard.total: {total}/{MAX_SCORE}; нужно минимум {MIN_SCORE}/{MAX_SCORE}")
     return issues, report
