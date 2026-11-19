@@ -575,8 +575,10 @@ class SessionStore:
                 "source_packet": packet_id, "plan": plan,
             }
             if path.is_file():
-                if json.loads(path.read_text(encoding="utf-8")) != record:
+                saved_plan = json.loads(path.read_text(encoding="utf-8"))
+                if saved_plan.get("plan") != plan:
                     raise StateError("План для этого ввода уже зафиксирован; нельзя переписывать его задним числом")
+                record = saved_plan  # Repeat reads/retries do not replace the first scan.
             else:
                 _atomic_write(path, _json_dumps(record))
             return {"planned": True, "plan_id": _digest(record)[:32],
