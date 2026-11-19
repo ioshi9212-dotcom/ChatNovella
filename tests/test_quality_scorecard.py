@@ -2,7 +2,7 @@
 import copy
 import unittest
 
-from chatnovella.quality_scorecard import check_scorecard, narrative_body, MIN_SCORE
+from chatnovella.quality_scorecard import check_scorecard, narrative_body, copied_prose, MIN_SCORE
 from review_helpers import scene, scorecard
 
 
@@ -79,6 +79,13 @@ class TestQualityScorecard(unittest.TestCase):
         report["reader_trace"]["input_quote"] = "(Подойти и обнять человека)"
         issues, _ = check_scorecard(report, scene(), "(Оглядеться)")
         self.assertTrue(any("scorecard.reader_trace" in issue for issue in issues))
+
+    def test_substantial_copy_from_previous_scene_is_detected(self):
+        repeated = scene()
+        self.assertTrue(copied_prose(repeated, [repeated]))
+        self.assertEqual(copied_prose(repeated, []), [])
+        different = scene("В другом месте день прошёл иначе, без прежнего происшествия.")
+        self.assertEqual(copied_prose(different, [scene()]), [])
 
     def test_bools_do_not_count_as_scores(self):
         report = scorecard()
