@@ -40,6 +40,16 @@ def inspect_scene(
             evidence.append(note.casefold())
             if note.casefold().rstrip(".! ") in {"всё соблюдено", "все соблюдено", "всё проверено", "все проверено"}:
                 issues.append(f"review.{key}: общее заверение не заменяет проверку текста")
+            if key == "direction" and item["status"] == "pass":
+                parts = re.fullmatch(
+                    r"Опора:\s*(.+?)\s*;\s*Сдвиг:\s*(.+?)\s*;\s*Зацепка:\s*(.+)",
+                    note, re.I | re.S,
+                )
+                if not parts or any(len(part.strip()) < 12 for part in parts.groups()):
+                    issues.append(
+                        "review.direction: при pass нужны конкретные 'Опора: ...; "
+                        "Сдвиг: ...; Зацепка: ...' (каждое поле от 12 символов)"
+                    )
             if item["status"] == "fail":
                 issues.append(f"review.{key}: {note}")
         if len(evidence) != len(set(evidence)):
