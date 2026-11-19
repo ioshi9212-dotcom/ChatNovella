@@ -12,6 +12,7 @@ def scene(body="Рината оглядела зал.", relationships="нет у
         "👤 Рината 👕 Одежда, волосы: джинсы, хвост 🎒 Инвентарь: телефон\n"
         "----------------------------------------\n"
         + body + "\n\n"
+        "В дальнем углу хлопнула дверь. Рината заметила свежий след у порога.\n\n"
         "Что я могу сделать:\n- Открыть окно\n- Подойти к столу\n- Проверить дверь\n"
         "Что я могу сказать:\n- Кто здесь?\n- Я подожду у двери.\n- Вы что-то потеряли?\n"
         "Что я могу подумать:\n- Здесь тихо.\n- Пора найти нужный стол.\n- Лучше осмотреть выход.\n"
@@ -25,8 +26,8 @@ def checks():
               for key in REVIEW_CHECKS}
     result["direction"]["evidence"] = (
         "Опора: ситуация Ринаты в читальном зале; "
-        "Сдвиг: Рината осмотрела зал и обнаружила доступные пути; "
-        "Зацепка: у Ринаты осталось конкретное действие для продолжения сцены"
+        "Сдвиг: В дальнем углу хлопнула дверь; "
+        "Зацепка: Рината заметила свежий след у порога"
     )
     return result
 
@@ -41,6 +42,17 @@ def reviewed_commit(store, session_id, expected_version, reader_text, narration,
         timeline_events=timeline_events,
         timeline_no_change_reason=timeline_no_change_reason, packet_id=packet_id,
     )
+    scan = store.prepare_turn(session_id, [])
+    for index in range(scan["count"]):
+        store.read_chunk(scan["packet_id"], index)
+    store.plan_scene(session_id, expected_version, reader_text, scan["packet_id"], {
+        "basis": "Проверочная сцена в читальном зале без активных арок",
+        "active_arcs": [], "candidate_npcs": [],
+        "time_span": "Короткая сцена без продолжительного временного перехода",
+        "npc_initiative": "Никто из NPC не участвует, движение создаёт мир",
+        "intended_shift": "Рината обнаруживает новое обстоятельство внутри зала",
+        "possible_hook": "Свежий след у порога даёт непосредственное продолжение",
+    })
     result = store.review_scene(**payload, checks=checks(), relationship_labels=relationship_labels or {})
     if not result["approved"]:
         raise StateError("; ".join(result["issues"]))
