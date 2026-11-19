@@ -84,7 +84,9 @@ class TestQualityScorecard(unittest.TestCase):
         repeated = scene()
         self.assertTrue(copied_prose(repeated, [repeated]))
         self.assertEqual(copied_prose(repeated, []), [])
-        different = scene("В другом месте день прошёл иначе, без прежнего происшествия.")
+        different = scene().replace(
+            "В дальнем углу хлопнула дверь.", "За окном раздался короткий звон."
+        )
         self.assertEqual(copied_prose(different, [scene()]), [])
 
     def test_bools_do_not_count_as_scores(self):
