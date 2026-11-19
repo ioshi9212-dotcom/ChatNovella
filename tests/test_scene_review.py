@@ -287,6 +287,63 @@ class TestSceneReview(unittest.TestCase):
         self.assertNotIn("Что я могу сделать:", body)
         self.assertNotIn("Погода:", body)
 
+    def test_rendered_heading_variants_and_direction_quotes_are_consistent(self):
+        for marker in ("**", "__", "_", "*"):
+            text = scene()
+            for heading in ("Что я могу сделать:", "Что я могу сказать:", "Что я могу подумать:"):
+                text = text.replace(heading, "### 🔸 " + marker + heading.rstrip(":") + marker)
+            text = text.replace("В дальнем углу хлопнула дверь.", "**В дальнем углу хлопнула дверь.**")
+            report = checks()
+            report["direction"]["evidence"] = "Опора: осмотр зала по заданному направлению; Сдвиг: **В дальнем углу хлопнула дверь.**; Зацепка: «Рината заметила свежий след у порога»"
+            with self.subTest(marker=marker):
+                issues, _ = inspect_scene(text, report, {})
+                self.assertEqual(issues, [])
+                invalid = text.replace("- Проверить дверь\n", "")
+                issues, _ = inspect_scene(invalid, report, {})
+                self.assertTrue(any("требуется ровно 3" in issue for issue in issues))
+
+    def test_parser_fix_recovers_exhausted_format_cycle_once_and_keeps_history(self):
+        payload = self.payload()
+        for attempt in range(6):
+            payload["narration"] = scene(f"Старый формат, черновик {attempt}").replace("Что я могу сделать:", "Нераспознанный заголовок")
+            result = self.review(payload)
+        self.assertTrue(result["blocked"])
+        path = self.store._review_path(self.store._root(self.sid), self.meta["version"], payload["reader_text"])
+        ledger = json.loads(path.read_text())
+        ledger.pop("parser_revision")  # Actual on-disk format before the fix.
+        path.write_text(json.dumps(ledger, ensure_ascii=False))
+        before = path.read_bytes()
+        report = self.store.review_diagnostics(self.sid)
+        self.assertTrue(report["cycles"][0]["retry_available_after_parser_fix"])
+        self.assertEqual(report["cycles"][0]["attempts"], 6)
+        self.assertEqual(path.read_bytes(), before)
+        payload["narration"] = scene().replace("Что я могу сделать:", "### 🔸 **Что я могу сделать**")
+        approved = self.review(payload)
+        self.assertTrue(approved["approved"], approved)
+        self.assertEqual(approved["correction_pass"], 0)
+        saved = json.loads(path.read_text())
+        self.assertEqual(len(saved["previous_parser_cycles"][0]["attempts"]), 6)
+        self.assertEqual(len(saved["attempts"]), 1)
+        self.assertEqual(self.review(payload), approved)
+        self.assertEqual(len(json.loads(path.read_text())["previous_parser_cycles"]), 1)
+        self.assertEqual(self.store.read_state(self.sid)["turn"], 0)
+
+    def test_parser_fix_does_not_reset_a_nonformat_failure_budget(self):
+        payload = self.payload()
+        report = checks()
+        report["pov"] = {"status": "fail", "evidence": "В сцене за POV принято принципиальное решение без основания."}
+        for attempt in range(6):
+            payload["narration"] = scene(f"Черновик с существенным дефектом {attempt}")
+            self.review(payload, report)
+        path = self.store._review_path(self.store._root(self.sid), self.meta["version"], payload["reader_text"])
+        ledger = json.loads(path.read_text()); ledger.pop("parser_revision")
+        path.write_text(json.dumps(ledger, ensure_ascii=False))
+        self.assertFalse(self.store.review_diagnostics(self.sid)["cycles"][0]["retry_available_after_parser_fix"])
+        payload["narration"] = scene()
+        result = self.review(payload)
+        self.assertTrue(result["blocked"])
+        self.assertFalse(result["approved"])
+
     def test_direction_requires_specific_progress_and_hook_evidence(self):
         report = checks()
         report["direction"]["evidence"] = "Сцена получилась интересной, в конце есть варианты."

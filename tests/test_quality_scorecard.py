@@ -95,6 +95,31 @@ class TestQualityScorecard(unittest.TestCase):
         issues, _ = check_scorecard(report, scene(), "(Оглядеться)")
         self.assertTrue(any("scorecard.pacing" in issue for issue in issues))
 
+    def test_markdown_titles_and_emphasis_do_not_hide_real_scene_evidence(self):
+        text = scene()
+        report = scorecard()
+        for key, item in report["axes"].items():
+            quote = item["quote"]
+            text = text.replace(quote, "**" + quote + "**")
+            item["quote"] = "«" + quote + "»"
+        for label in ("Что я могу сделать:", "Что я могу сказать:", "Что я могу подумать:"):
+            text = text.replace(label, "### 🔸 **" + label.rstrip(":").replace(" ", "\u00a0") + "**")
+        issues, result = check_scorecard(report, text, "(Оглядеться)")
+        self.assertEqual(issues, [])
+        self.assertEqual(result["total"], 12)
+        self.assertNotIn("Что я могу сделать", narrative_body(text))
+        report["axes"]["pacing"]["quote"] = "«На полу у порога лежала совершенно другая выдуманная вещь.»"
+        issues, _ = check_scorecard(report, text, "(Оглядеться)")
+        self.assertTrue(any("scorecard.pacing" in issue for issue in issues))
+
+    def test_quotes_from_options_and_markup_only_are_not_evidence(self):
+        report = scorecard()
+        text = scene().replace("Что я могу сделать:", "## 🔸 _Что я могу сделать_")
+        for quote in ("********************", "Пора найти нужный стол."):
+            report["axes"]["pacing"]["quote"] = quote
+            issues, _ = check_scorecard(report, text, "(Оглядеться)")
+            self.assertTrue(any("scorecard.pacing" in issue for issue in issues))
+
 
 if __name__ == "__main__":
     unittest.main()

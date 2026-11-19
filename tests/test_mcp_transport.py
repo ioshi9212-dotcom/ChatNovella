@@ -97,6 +97,11 @@ class TestMCPTransport(unittest.TestCase):
             }
             reviewed = call("review_novella_scene", {**payload, "checks": checks(), "relationship_labels": {}, "scorecard": scorecard(payload["reader_text"])})
             self.assertTrue(reviewed["approved"], reviewed)
+            status = call("get_session_status", {"session_id": meta["session_id"]})
+            self.assertEqual(status["turn"], 0)
+            diagnostic = status["scene_review_diagnostics"]
+            self.assertEqual(diagnostic["active_parser_revision"], 2)
+            self.assertTrue(diagnostic["cycles"][0]["result"]["approved"])
             saved = call("save_novella_turn", {**payload, "review_id": reviewed["review_id"]})
             self.assertEqual(saved["turn"], 1)
 

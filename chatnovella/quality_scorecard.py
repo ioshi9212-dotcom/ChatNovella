@@ -10,7 +10,7 @@ import re
 from typing import Any
 
 from chatnovella.pov_provenance import validate_pov_provenance
-from chatnovella.scene_review import plain, scene_lines
+from chatnovella.scene_review import plain, scene_lines, visible_text, evidence_text
 
 QUALITY_AXES = (
     "pov_autonomy",
@@ -44,7 +44,7 @@ _FADE = re.compile(
 
 
 def _normalize(value: str) -> str:
-    return " ".join(re.sub(r"\*\*", "", value).casefold().split())
+    return visible_text(value)
 
 
 def narrative_body(narration: str) -> str:
@@ -94,6 +94,8 @@ def check_scorecard(
     }:
         return ["scorecard: нужны axes, critical, reader_trace, fade_notes и pov_actions"], report
     body = _normalize(narrative_body(narration))
+    if not body:
+        issues.append("scorecard.body: художественная часть не выделена; проверь заголовок блока «Что я могу сделать». Цитаты пока невозможно сверить")
     reader = _normalize(reader_text)
     axes = card["axes"]
     if not isinstance(axes, dict) or set(axes) != set(QUALITY_AXES):
@@ -115,11 +117,11 @@ def check_scorecard(
         total += score
         quote, basis = item["quote"], item["basis"]
         defect, fix = item["issue"], item["fix"]
-        if (not isinstance(quote, str) or not 18 <= len(quote.strip()) <= 280
-                or _normalize(quote) not in body):
+        if (not isinstance(quote, str) or not 18 <= len(evidence_text(quote)) <= 280
+                or evidence_text(quote) not in body):
             issues.append(f"scorecard.{key}: нужна дословная цитата 18–280 символов из художественной части, не из вариантов")
         else:
-            normalized_quote = _normalize(quote)
+            normalized_quote = evidence_text(quote)
             quotes.append(normalized_quote)
             at = body.find(normalized_quote)
             quote_spans.append((at, at + len(normalized_quote)))
@@ -180,8 +182,8 @@ def check_scorecard(
         if (not isinstance(inp, str) or not 1 <= len(inp.strip()) <= 240
                 or _normalize(inp) not in reader):
             issues.append("scorecard.reader_trace: цитата ввода должна действительно быть во вводе читателя")
-        if (not isinstance(observed, str) or len(observed.strip()) < 18
-                or _normalize(observed) not in body):
+        if (not isinstance(observed, str) or len(evidence_text(observed)) < 18
+                or evidence_text(observed) not in body):
             issues.append("scorecard.reader_trace: процитируй исполнение ввода именно из художественной части")
         if not isinstance(why, str) or not 30 <= len(why.strip()) <= 500:
             issues.append("scorecard.reader_trace: объясни связь ввода с фактически написанным (30–500 символов)")
@@ -200,10 +202,10 @@ def check_scorecard(
             quote, reason = item["quote"], item["reason"]
             if (not isinstance(quote, str) or not isinstance(reason, str)
                     or len(reason.strip()) < 35 or len(reason.strip()) > 500
-                    or _normalize(quote) not in body):
+                    or evidence_text(quote) not in body):
                 issues.append(f"scorecard.fade_notes[{i}]: приведи точный фрагмент перехода и объясни, почему важное не затемнено")
             else:
-                used.add(_normalize(quote))
+                used.add(evidence_text(quote))
         for cue in cues:
             if not any(_normalize(cue) in quote for quote in used):
                 issues.append(f"scorecard.fade: найден переход «{cue}»; обоснуй осмысленный монтаж либо признай затемнение и исправь")

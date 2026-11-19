@@ -18,8 +18,8 @@ import tempfile
 from pathlib import Path
 from typing import Any, Iterator
 
-from chatnovella.scene_review import MAX_CORRECTIONS, REVIEW_CHECKS, inspect_scene
-from chatnovella.quality_scorecard import check_scorecard, copied_prose, QUALITY_AXES, MIN_SCORE
+from chatnovella.scene_review import MAX_CORRECTIONS, REVIEW_CHECKS, PARSER_REVISION, inspect_scene, parser_related, plain
+from chatnovella.quality_scorecard import check_scorecard, copied_prose, QUALITY_AXES, MIN_SCORE, narrative_body
 
 STATE_FILES = (
     "state/scene.md", "state/locations.md", "state/roster.md",
@@ -388,6 +388,41 @@ class SessionStore:
     def read_state(self, session_id: str) -> dict[str, Any]:
         return self._current(self._root(session_id))
 
+    def review_diagnostics(self, session_id: str) -> dict[str, Any]:
+        """Read failed review reports without modifying a session or its budget."""
+        root = self._root(session_id)
+        with self._locked(root):
+            version = self._current(root)["version"]
+            directory = root / "scene_reviews" / f"v{version:08d}"
+            paths = sorted(directory.glob("*.json"), key=lambda p: p.stat().st_mtime_ns, reverse=True)[:3]
+            cycles = []
+            for path in paths:
+                ledger = json.loads(path.read_text(encoding="utf-8"))
+                attempts = ledger.get("attempts", [])
+                if not attempts:
+                    continue
+                last = attempts[-1]
+                card = last.get("scorecard")
+                axes = card.get("axes", {}) if isinstance(card, dict) else {}
+                axes = axes if isinstance(axes, dict) else {}
+                cycles.append({
+                    "reader_hash": path.stem,
+                    "parser_revision": ledger.get("parser_revision", 1),
+                    "attempts": len(attempts),
+                    "previous_parser_cycles": len(ledger.get("previous_parser_cycles", [])),
+                    "retry_available_after_parser_fix": (
+                        ledger.get("parser_revision", 1) < PARSER_REVISION
+                        and not last["result"].get("approved")
+                        and any(parser_related(item["result"].get("issues", [])) for item in attempts)
+                    ),
+                    "result": last["result"],
+                    "direction_evidence": last.get("checks", {}).get("direction", {}).get("evidence", ""),
+                    "scorecard_quotes": {key: item.get("quote", "")
+                        for key, item in axes.items()
+                        if isinstance(item, dict)},
+                })
+            return {"version": version, "active_parser_revision": PARSER_REVISION, "cycles": cycles}
+
     def read_original(self, session_id: str) -> str:
         return (self._root(session_id) / "original.md").read_text(encoding="utf-8")
 
@@ -643,7 +678,7 @@ class SessionStore:
             raise StateError("Превышен допустимый размер текста")
         payload = _turn_payload(reader_text, narration, files, timeline_events,
                                 timeline_no_change_reason, packet_id)
-        request_hash = _digest({"payload": payload, "checks": checks,
+        request_hash = _digest({"parser_revision": PARSER_REVISION, "payload": payload, "checks": checks,
                                 "relationship_labels": relationship_labels,
                                 "scorecard": scorecard})
         root = self._root(session_id)
@@ -661,6 +696,17 @@ class SessionStore:
                 raise StateError("Получите новый prepare_novella_turn с engine/scene_review.md и прочитайте все чанки")
             path = self._review_path(root, expected_version, reader_text)
             ledger = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {"attempts": []}
+            old_revision = ledger.get("parser_revision", 1)
+            if (old_revision < PARSER_REVISION and ledger["attempts"]
+                    and not ledger["attempts"][-1]["result"].get("approved")
+                    and any(parser_related(item["result"].get("issues", [])) for item in ledger["attempts"])):
+                # One recovery cycle after the parser fix, preserving every
+                # old rejection. Merely fetching a packet still resets nothing.
+                ledger.setdefault("previous_parser_cycles", []).append({
+                    "parser_revision": old_revision, "attempts": ledger["attempts"],
+                })
+                ledger["attempts"] = []
+            ledger["parser_revision"] = PARSER_REVISION
             attempts = ledger["attempts"]
             if attempts and attempts[-1]["request_hash"] == request_hash:
                 return attempts[-1]["result"]  # Network retries consume no pass.
@@ -765,6 +811,14 @@ class SessionStore:
                 "blocked": bool(issues) and correction == MAX_CORRECTIONS,
                 "issues": issues,
                 "quality_score": quality,
+                "format_debug": {
+                    "parser_revision": PARSER_REVISION,
+                    "choice_titles": [line.strip()[:180] for line in narration.splitlines()
+                                      if "что" in line.casefold() and "могу" in line.casefold()][:12],
+                    "normalized_titles": [plain(line) for line in narration.splitlines()
+                                          if "что" in line.casefold() and "могу" in line.casefold()][:12],
+                    "narrative_characters": len(narrative_body(narration)),
+                },
             }
             attempts.append({
                 "request_hash": request_hash, "payload_hash": _digest(payload),

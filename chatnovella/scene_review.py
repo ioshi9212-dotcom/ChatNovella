@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime
 import re
+import unicodedata
 from typing import Any
 
 REVIEW_CHECKS = (
@@ -10,20 +11,64 @@ REVIEW_CHECKS = (
     "skin", "persistence",
 )
 MAX_CORRECTIONS = 5
+PARSER_REVISION = 2
 OPTION_HEADINGS = (
     "Что я могу сделать:", "Что я могу сказать:", "Что я могу подумать:",
 )
 
 
+def rendered_text(text: str) -> str:
+    """Remove presentation markers, preserving actual words and punctuation."""
+    text = unicodedata.normalize("NFC", text)
+    text = re.sub(r"[\u200b\u200e\u200f\ufeff]", "", text)
+    text = text.replace("**", "").replace("__", "")
+    text = re.sub(r"(?<!\w)([*_])(?=\S)(.+?)(?<=\S)\1(?!\w)", r"\2", text, flags=re.S)
+    text = re.sub(r"`([^`\n]+)`", r"\1", text)
+    return text
+
+
+def visible_text(text: str) -> str:
+    """Compare rendered words, ignoring Markdown emphasis and invisible spacing."""
+    return " ".join(rendered_text(text).casefold().split())
+
+
+def evidence_text(text: str) -> str:
+    text = visible_text(text)
+    for opening, closing in (("«", "»"), ('"', '"'), ("“", "”"), ("‘", "’")):
+        if text.startswith(opening) and text.endswith(closing):
+            return text[len(opening):-len(closing)].strip()
+    return text
+
+
 def plain(line: str) -> str:
-    text = re.sub(r"^#{1,6}\s+", "", line.strip()).replace("**", "").strip()
-    return re.sub(r"^🔸\s*(?=Что я могу (?:сделать|сказать|подумать):)", "", text)
+    text = rendered_text(re.sub(r"^#{1,6}\s+", "", line.strip())).strip()
+    candidate = re.sub(r"^🔸\s*", "", text).strip("*_ ")
+    candidate = " ".join(candidate.split()).casefold()
+    for heading in (*OPTION_HEADINGS, "Состояние:", "Отношения:"):
+        if candidate.rstrip(":? ") == heading[:-1].casefold():
+            return heading
+    for heading in ("Состояние:", "Отношения:"):
+        match = re.fullmatch(re.escape(heading[:-1]) + r"\s*:\s*(.*)", text, re.I)
+        if match:
+            return heading + " " + match[1]
+    return text
+
+
+def parser_related(issues: list[str]) -> bool:
+    return any(
+        issue.startswith(("skin.blocks:", "skin.options:"))
+        or (issue.startswith(("scorecard.", "review.direction:"))
+            and any(word in issue for word in ("цитат", "фрагмент", "художественной части")))
+        for issue in issues
+    )
 
 
 def scene_lines(narration: str) -> list[str]:
     """Normalize the combined weather/scene row for checks, never for saving."""
     lines = narration.splitlines()
     for index, line in enumerate(lines):
+        if plain(line).startswith("👤"):
+            break
         if plain(line).startswith("📌") and "🎬" in line:
             weather, current = line.split("🎬", 1)
             lines[index:index + 1] = [weather.rstrip(), "🎬 " + current.lstrip()]
@@ -117,9 +162,9 @@ def inspect_scene(
             report.strip(), re.I | re.S,
         ) if isinstance(report, str) else None
         if matched:
-            narrative = re.sub(r"\s+", " ", " ".join(body)).casefold()
+            narrative = visible_text(" ".join(body))
             quotes = [
-                re.sub(r"\s+", " ", matched.group(i).strip().strip('«»"')).casefold()
+                evidence_text(matched.group(i))
                 for i in (2, 3)
             ]
             if any(part not in narrative for part in quotes):
@@ -137,7 +182,7 @@ def inspect_scene(
         for line in lines[start + 1:end]:
             if re.fullmatch(r"[-—_*]{3,}", line):
                 continue
-            match = re.match(r"^(?:[-*•]\s+|\d+[.)]\s+)(\S.*)$", line)
+            match = re.match(r"^(?:[-*•—–]\s+|\d+[.)]\s+)(\S.*)$", line)
             if match:
                 options.append(match.group(1))
             elif options:

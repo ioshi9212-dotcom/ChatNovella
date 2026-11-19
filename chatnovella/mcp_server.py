@@ -71,8 +71,13 @@ def create_novella_session(
 
 @mcp.tool()
 def get_session_status(session_id: str) -> dict[str, Any]:
-    """Resume by exact session ID; return status, version, turn and audits."""
-    return store.read_state(session_id)
+    """Resume by exact ID; read status, version, turn, audits and recent review errors.
+
+    scene_review_diagnostics is read-only: actual errors, consumed attempts,
+    parser revision and submitted evidence. It never writes a gameplay turn.
+    """
+    return {**store.read_state(session_id),
+            "scene_review_diagnostics": store.review_diagnostics(session_id)}
 
 
 @mcp.tool()
