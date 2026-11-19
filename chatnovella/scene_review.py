@@ -9,7 +9,7 @@ REVIEW_CHECKS = (
     "canon", "pov", "npc", "continuity", "direction", "knowledge",
     "skin", "persistence",
 )
-MAX_CORRECTIONS = 2
+MAX_CORRECTIONS = 5
 OPTION_HEADINGS = (
     "Что я могу сделать:", "Что я могу сказать:", "Что я могу подумать:",
 )
