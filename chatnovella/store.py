@@ -118,6 +118,51 @@ def _validate_relation(content: str, path: str) -> None:
         _relation_stats(content, path, required=True)
 
 
+def _scale_identity(label: str) -> str:
+    """Only explicit equivalent labels; love/attachment/care stay separate."""
+    label = " ".join(label.casefold().replace("ё", "е").strip().rstrip(":").split())
+    return {
+        "сексуальное влечение": "влечение",
+        "тревога за нее": "тревога", "тревога за него": "тревога",
+        "усталость от ее состояния": "усталость",
+        "усталость от его состояния": "усталость",
+        "усталость от ситуации": "усталость",
+    }.get(label, label)
+
+
+def _declared_relation_scales(core: str) -> list[str]:
+    """Read an author's explicit starting-feelings list, not inferred emotions."""
+    declared = []
+    pattern = r"(?:стартовые\s+(?:чувства|показатели|шкалы)|обязательные\s+(?:показатели|шкалы))[^:\n.!?]{0,160}:\s*([^\n.!?]+)"
+    for match in re.finditer(pattern, core, re.I):
+        for item in re.split(r"[,;]|\s+и\s+", match[1]):
+            label = re.sub(r"\s+\d+(?:\s*/\s*[+-]?\d+)?\s*$", "", item).strip(" \t-*•")
+            if label and label.casefold() not in {x.casefold() for x in declared}:
+                declared.append(label)
+    return declared
+
+
+def _profile_core(current: Path, npc_id: str, files: dict[str, str] | None = None) -> str:
+    name = f"characters/{npc_id}/core.md"
+    if files is not None and name in files:
+        _safe_change(name, files[name])
+        content = files[name]
+    else:
+        path = current / name
+        content = path.read_text(encoding="utf-8") if path.is_file() else ""
+    if not content.strip():
+        raise StateError(f"У {npc_id} нет карточки core.md; числовые отношения для эпизодического NPC запрещены")
+    return content
+
+
+def _require_declared_scales(core: str, stats: dict[str, tuple[int, int]], npc_id: str) -> None:
+    covered = {_scale_identity(label) for label in stats}
+    declared = _declared_relation_scales(core)
+    missing = [label for label in declared if _scale_identity(label) not in covered]
+    if missing:
+        raise StateError(f"{npc_id}: из {len(declared)} явно заданных автором шкал пропущены: " + "; ".join(missing))
+
+
 def _validate_items(content: str) -> None:
     ids = re.findall(r"^##\s+(ITEM_[A-Za-z0-9_-]+)\b", content, re.MULTILINE)
     if len(ids) != len(set(ids)):
@@ -139,8 +184,11 @@ def _validate_relation_updates(current: Path, files: dict[str, str]) -> None:
         if not name.endswith("/relations.md"):
             continue
         old_file = current / name
+        npc_id = name.split("/")[1]
+        core = _profile_core(current, npc_id, files)
         old = _relation_stats(old_file.read_text(encoding="utf-8"), name) if old_file.is_file() else {}
         new = _relation_stats(text, name, required=True)
+        _require_declared_scales(core, new, npc_id)
         if set(old) - set(new):
             raise StateError(f"Нельзя удалять сохранённые показатели отношений: {name}")
         for label in old.keys() & new.keys():
@@ -449,7 +497,8 @@ class SessionStore:
                 relation = npc / "relations.md"
                 if relation.is_file():
                     try:
-                        _relation_stats(relation.read_text(encoding="utf-8"), str(relation.relative_to(rev)), required=True)
+                        stats = _relation_stats(relation.read_text(encoding="utf-8"), str(relation.relative_to(rev)), required=True)
+                        _require_declared_scales(_profile_core(rev, npc.name), stats, npc.name)
                     except StateError as exc:
                         relation_errors.append(str(exc))
         candidates = [
@@ -690,7 +739,8 @@ class SessionStore:
             except StateError as exc:
                 issues.append(f"persistence: {exc}")
             expected_npcs = {p["id"] for p in packet["participants"]
-                             if p["mode"] in ("physical", "phone", "observer")}
+                             if p["mode"] in ("physical", "phone", "observer")
+                             and (rev / f"characters/{p['id']}/core.md").is_file()}
             if not isinstance(relationship_labels, dict) or set(relationship_labels) != expected_npcs:
                 issues.append("skin.relationships: подписи должны включать всех участвующих NPC из пакета (physical/phone/observer), без упомянутых и посторонних")
             for npc_id in expected_npcs:
@@ -704,8 +754,41 @@ class SessionStore:
                         expected = {key: (value, 0) for key, (value, _) in before.items()}
                     if footer.get(npc_id) != expected:
                         issues.append(f"skin.relationships: {npc_id}: нижняя строка должна содержать все сохранённые шкалы с точным итогом и дельтой этого хода")
+                    _require_declared_scales(_profile_core(rev, npc_id, files), expected, npc_id)
                 except (StateError, OSError) as exc:
                     issues.append(f"skin.relationships: {npc_id}: {exc}")
+            # A tiny, explicit per-NPC decision prevents skipping relationship
+            # evaluation. It does not pretend to judge character psychology.
+            changed_files = files if isinstance(files, dict) else {}
+            audit_ids = expected_npcs | {
+                name.split("/")[1] for name in changed_files
+                if isinstance(name, str) and CHAR_PATH.fullmatch(name) and name.endswith("/relations.md")
+            }
+            npc_check = checks.get("npc", {}) if isinstance(checks, dict) else {}
+            raw_audit = npc_check.get("relationships", "{}") if isinstance(npc_check, dict) else "{}"
+            try:
+                audit = json.loads(raw_audit) if isinstance(raw_audit, str) and len(raw_audit) <= 60_000 else None
+            except (ValueError, TypeError):
+                audit = None
+            if not isinstance(audit, dict) or set(audit) != audit_ids:
+                issues.append("review.relationships: в checks.npc.relationships нужна JSON-строка с решением changed/unchanged и reason для каждого NPC с карточкой, включая изменённые за кадром relations.md")
+            else:
+                for npc_id, decision in audit.items():
+                    if (not isinstance(decision, dict) or set(decision) != {"status", "reason"}
+                            or decision.get("status") not in ("changed", "unchanged")
+                            or not isinstance(decision.get("reason"), str)
+                            or not 12 <= len(decision["reason"].strip()) <= 240):
+                        issues.append(f"review.relationships: {npc_id}: нужны status=changed/unchanged и конкретная reason (12–240 символов)")
+                        continue
+                    name = f"characters/{npc_id}/relations.md"
+                    try:
+                        if name in changed_files:
+                            _safe_change(name, changed_files[name])
+                        changed = name in changed_files and any(delta != 0 for _, delta in _relation_stats(changed_files[name], name, required=True).values())
+                        if changed != (decision["status"] == "changed"):
+                            issues.append(f"review.relationships: {npc_id}: решение не совпадает с дельтами в записываемой карточке")
+                    except StateError as exc:
+                        issues.append(f"review.relationships: {exc}")
             independent = None
             if not issues:
                 plan = json.loads(plan_path.read_text(encoding="utf-8"))["plan"]
@@ -836,11 +919,44 @@ class SessionStore:
                 if not target.is_file():
                     raise StateError(f"Сначала создайте анкету NPC: {path}")
                 previous = target.read_text(encoding="utf-8")
+                core = _profile_core(rev, npc)
                 existing = _relation_stats(previous, path)
                 if existing:
-                    if {key: value for key, (value, _) in existing.items()} != normalized:
+                    if any(key in existing and existing[key][0] != value for key, value in normalized.items()):
                         raise StateError(f"Показатели уже существуют; инициализация не может их менять: {npc}")
-                    sources[npc] = {"kind": "already_present"}
+                    additions = {key: value for key, value in normalized.items() if key not in existing}
+                    if not additions:
+                        sources[npc] = {"kind": "already_present"}
+                        continue
+                    allowed = {_scale_identity(label) for label in _declared_relation_scales(core)} - {_scale_identity(label) for label in existing}
+                    if any(_scale_identity(label) not in allowed for label in additions):
+                        raise StateError(f"Дополнять существующие показатели можно только пропущенными шкалами, явно перечисленными в исходной карточке: {npc}")
+                    restored = {}
+                    for old in sorted((root / "revisions").glob("v[0-9]*"), reverse=True):
+                        if old.name >= rev.name or not (old / path).is_file():
+                            continue
+                        try:
+                            found = _relation_stats((old / path).read_text(encoding="utf-8"), path)
+                        except StateError:
+                            continue
+                        for label in additions:
+                            if label in restored:
+                                continue
+                            match = next(((value, key) for key, (value, _) in found.items()
+                                          if _scale_identity(key) == _scale_identity(label)), None)
+                            if match:
+                                if additions[label] != match[0]:
+                                    raise StateError(f"Найдено прежнее значение {npc}: {label} {match[0]} в {old.name}; восстановите его")
+                                restored[label] = old.name
+                    combined = {**existing, **{key: (value, 0) for key, value in additions.items()}}
+                    _require_declared_scales(core, combined, npc)
+                    block = "## Дополнены пропущенные авторские шкалы NPC→POV\n" + "\n".join(f"- {label} {value}/+0" for label, value in additions.items())
+                    candidate = block + "\n\nСлужебное дополнение, без игрового хода. Новые числа — оценки механики, если не найдены в истории. Основание: " + " ".join(basis.splitlines()) + "\n\n" + previous
+                    _validate_relation(candidate, path)
+                    changes[path] = candidate
+                    sources[npc] = {"kind": "completed", "added": additions,
+                                    "restored_from": restored,
+                                    "preserved": {key: value for key, (value, _) in existing.items()}}
                     continue
                 historical = None
                 for old in sorted((root / "revisions").glob("v[0-9]*"), reverse=True):
@@ -855,6 +971,7 @@ class SessionStore:
                         break
                 if historical and historical[1] != normalized:
                     raise StateError(f"Найдены прежние значения {npc} в {historical[0]}; восстановите их вместо новых оценок: {historical[1]}")
+                _require_declared_scales(core, {key: (value, 0) for key, value in normalized.items()}, npc)
                 sources[npc] = {"kind": "restored" if historical else "initialized"}
                 if historical:
                     sources[npc]["source_revision"] = historical[0]
@@ -1041,11 +1158,19 @@ class SessionStore:
             parts.append(("system/npc_scout", "\n\n".join(index)))
         packet = self._packet(session_id, meta["version"], parts, participants=participants)
         packet["engine_files"] = list(ENGINE_CONTEXT_FILES)
+        packet["relationship_npc_ids"] = sorted({
+            info["id"] for info in participants
+            if info["mode"] in ("physical", "phone", "observer")
+            and (rev / f"characters/{info['id']}/core.md").is_file()
+        })
         packet["pre_save_review"] = (
             "Примените engine/scene_review.md к готовому черновику и вызовите "
             "review_novella_scene с восемью конкретными результатами. Сервер "
             "дополнительно вызывает независимого модельного рецензента. "
             "При ошибках исправляйте черновик и повторяйте проверку до одобрения. "
+            "В checks.npc.relationships передайте JSON-строку с changed/unchanged "
+            "и reason для каждого карточного NPC и изменяемых relations.md; "
+            "у эпизодических NPC без карточки числовых отношений нет. "
             "В save_novella_turn передайте одобренный review_id и тот же текст, "
             "файлы и хронологию. Затем опубликуйте сохранённый текст без отчёта."
         )

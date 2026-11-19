@@ -133,7 +133,7 @@ def prepare_novella_turn(
     read all chunks; run plan_novella_scene BEFORE drafting, then call this
     tool again with actual participants and read the final packet.
     Then apply engine/scene_review.md and call review_novella_scene.
-    One initial draft plus at most two corrected submissions, no endless loop.
+    Follow the current review protocol and rewrite failed drafts before saving.
     """
     return store.prepare_turn(session_id, participants)
 
@@ -184,6 +184,10 @@ def review_novella_scene(
     Read engine/scene_review.md. checks has exactly eight keys: canon, pov,
     npc, continuity, direction, knowledge, skin, persistence. Each value is
     {"status":"pass" or "fail", "evidence":"concrete result, 12–350 chars"}.
+    npc also has relationships, a JSON STRING mapping each profiled participant
+    (and each offscreen updated relation card) to {"status":"changed" or
+    "unchanged","reason":"specific event/no-change reason, 12–240 chars"}.
+    No numeric relationships for incidental actors without a core.md card.
     Check actual text against all loaded rules/cards; report flaws honestly.
     The author's checks are ADDITIONAL and never grant approval alone:
     the server calls a separate model to audit canon, relationships,
@@ -258,7 +262,10 @@ def initialize_novella_relationship_metrics(
     Explain the canon basis. These are initial game-mechanic estimates unless
     genuine earlier numeric values exist in revision history. In that case
     restore the historical values reported by the server instead of guessing.
-    Existing numeric scales cannot be overwritten. Prose, original and game
+    Existing numeric scales cannot be overwritten. Missing scales from an
+    explicit author list in core.md can be completed with this same tool;
+    historical values take priority, existing values/deltas remain untouched.
+    Prose, original and game
     transcript are preserved; the state version changes, gameplay turn does not.
     """
     return store.initialize_relationship_metrics(session_id, expected_version, metrics, basis)

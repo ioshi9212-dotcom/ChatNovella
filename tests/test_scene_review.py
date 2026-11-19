@@ -7,7 +7,7 @@ from pathlib import Path
 
 from chatnovella.scene_review import REVIEW_CHECKS, inspect_scene
 from chatnovella.store import CHAR_FILES, STATE_FILES, SessionStore, StateError
-from review_helpers import checks, scene, fake_semantic_reviewer
+from review_helpers import checks, scene, fake_semantic_reviewer, relationship_report
 
 
 class TestSceneReview(unittest.TestCase):
@@ -53,7 +53,8 @@ class TestSceneReview(unittest.TestCase):
         )
 
     def review(self, payload, report=None, labels=None):
-        return self.store.review_scene(**payload, checks=report or checks(),
+        report = relationship_report(report or checks(), labels or {}, payload["files"])
+        return self.store.review_scene(**payload, checks=report,
                                        relationship_labels=labels or {})
 
     def test_review_rejects_missing_pre_scene_plan(self):
@@ -286,6 +287,33 @@ class TestSceneReview(unittest.TestCase):
         payload["files"]["characters/NPC_001/relations.md"] = "- интерес 52/+2\n- доверие 30/+0"
         right = self.review(payload, labels={"NPC_001": "Сайлас"})
         self.assertTrue(right["approved"], right)
+
+    def test_per_npc_relationship_decision_is_required_and_must_match_written_delta(self):
+        self.add_npc()
+        payload = self.payload([{"id": "NPC_001", "mode": "physical"}])
+        labels = {"NPC_001": "Сайлас"}
+        payload["narration"] = scene(relationships="Сайлас — интерес 50/0; доверие 30/0")
+        missing = self.store.review_scene(**payload, checks=checks(), relationship_labels=labels)
+        self.assertFalse(missing["approved"])
+        self.assertTrue(any("review.relationships" in issue for issue in missing["issues"]))
+        report = checks()
+        report["npc"]["relationships"] = json.dumps({"NPC_001": {"status": "changed", "reason": "У героя возник новый интерес после разговора."}}, ensure_ascii=False)
+        false_change = self.store.review_scene(**payload, checks=report, relationship_labels=labels)
+        self.assertFalse(false_change["approved"])
+        self.assertTrue(any("не совпадает с дельтами" in issue for issue in false_change["issues"]))
+        payload["files"]["characters/NPC_001/relations.md"] = "- интерес 52/+2\n- доверие 30/+0"
+        payload["narration"] = scene(relationships="Сайлас — интерес 52/+2; доверие 30/0")
+        correct = self.store.review_scene(**payload, checks=report, relationship_labels=labels)
+        self.assertTrue(correct["approved"], correct)
+
+    def test_ephemeral_guard_gets_no_numeric_footer(self):
+        payload = self.payload()
+        payload["narration"] = scene("Охранник нахмурился и пропустил её.", "Охранник — раздражение 16/+1")
+        result = self.store.review_scene(**payload, checks=checks(), relationship_labels={"NPC_GUARD": "Охранник"})
+        self.assertFalse(result["approved"])
+        payload["narration"] = scene("Охранник нахмурился и пропустил её.")
+        correct = self.store.review_scene(**payload, checks=checks(), relationship_labels={})
+        self.assertTrue(correct["approved"], correct)
 
     def test_review_cannot_authorize_another_session(self):
         payload = self.payload()

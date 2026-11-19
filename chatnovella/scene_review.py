@@ -31,7 +31,8 @@ def inspect_scene(
         evidence = []
         for key in REVIEW_CHECKS:
             item = checks[key]
-            if (not isinstance(item, dict) or set(item) != {"status", "evidence"}
+            allowed = {"status", "evidence", "relationships"} if key == "npc" else {"status", "evidence"}
+            if (not isinstance(item, dict) or not {"status", "evidence"} <= set(item) or set(item) - allowed
                     or item["status"] not in ("pass", "fail")
                     or not isinstance(item["evidence"], str)
                     or not 12 <= len(item["evidence"].strip()) <= 350):

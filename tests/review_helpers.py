@@ -1,4 +1,6 @@
 """Complete scene fixtures for storage tests that used bare narration strings."""
+import json
+import re
 from chatnovella.scene_review import REVIEW_CHECKS
 from chatnovella.semantic_review import SEMANTIC_KEYS
 from chatnovella.store import StateError
@@ -51,6 +53,19 @@ def fake_semantic_reviewer(context):
         },
     }
 
+def relationship_report(report, labels, files):
+    """Fill storage fixtures; relationship tests supply their own decisions."""
+    ids = set(labels) | {name.split("/")[1] for name in files if name.endswith("/relations.md")}
+    decisions = {}
+    for npc_id in ids:
+        text = files.get(f"characters/{npc_id}/relations.md", "")
+        changed = bool(re.search(r"/[+-]?[1-9]\d*\s*$", text, re.M))
+        decisions[npc_id] = {"status": "changed" if changed else "unchanged",
+                             "reason": "Событие тестовой сцены изменило отношение." if changed else "В тестовой сцене нет нового основания для сдвига отношений."}
+    report["npc"].setdefault("relationships", json.dumps(decisions, ensure_ascii=False))
+    return report
+
+
 def reviewed_commit(store, session_id, expected_version, reader_text, narration,
                     files, timeline_events=None, timeline_no_change_reason="",
                     packet_id=None, relationship_labels=None,
@@ -73,7 +88,8 @@ def reviewed_commit(store, session_id, expected_version, reader_text, narration,
         "possible_hook": "Свежий след у порога даёт непосредственное продолжение",
     })
     store.semantic_reviewer = fake_semantic_reviewer
-    result = store.review_scene(**payload, checks=checks(), relationship_labels=relationship_labels or {})
+    report = relationship_report(checks(), relationship_labels or {}, files)
+    result = store.review_scene(**payload, checks=report, relationship_labels=relationship_labels or {})
     if not result["approved"]:
         raise StateError("; ".join(result["issues"]))
     return store.commit_turn(**payload, review_id=result["review_id"])

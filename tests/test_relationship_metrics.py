@@ -7,11 +7,19 @@ from pathlib import Path
 
 from chatnovella.store import (
     CHAR_FILES, STATE_FILES, SessionStore, StateError, _atomic_write,
-    _validate_relation,
+    _validate_relation, _validate_relation_updates, _relation_stats,
 )
 
 
 class TestRelationshipMetrics(unittest.TestCase):
+    declared_core = (
+        "Эдриан Морвелл. Стартовые чувства Эдриана к Ринате: любовь, "
+        "привязанность, сексуальное влечение, тревога за неё, усталость "
+        "от её состояния, раздражение и ответственность. Он скрывает чувства."
+    )
+    partial_relations = "Авторское описание сохранено.\n- любовь 85/+0\n- тревога 90/+0\n- раздражение 65/+0\n"
+    additions = {"привязанность": 88, "сексуальное влечение": 80,
+                 "усталость от её состояния": 75, "ответственность": 90}
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
@@ -154,6 +162,66 @@ class TestRelationshipMetrics(unittest.TestCase):
                 self.store.initialize_relationship_metrics(self.sid, version, metrics, self.basis)
             self.assertEqual(self.store.read_state(self.sid), before)
             self.assertNotIn("/+0", self.file(self.path).read_text())
+
+    def partial_author_setup(self):
+        self.seed_legacy()
+        _atomic_write(self.file("characters/NPC_001/core.md"), self.declared_core)
+        _atomic_write(self.file(self.path), self.partial_relations)
+
+    def test_setup_rejects_three_of_seven_even_with_approved_gaps(self):
+        self.partial_author_setup()
+        report = self.store.setup_report(self.sid)
+        self.assertTrue(any("из 7" in issue and "ответственность" in issue for issue in report["relation_errors"]))
+        with self.assertRaisesRegex(StateError, "числовые отношения"):
+            self.store.activate(self.sid, self.meta["version"], True)
+
+    def test_complete_explicit_author_scales_preserves_existing_values_and_history(self):
+        self.partial_author_setup()
+        self.meta = self.store._write_revision(self.store._root(self.sid), self.meta, {}, status="active", turn=10)
+        before = self.meta
+        journal = self.file("system/turns.jsonl").read_bytes()
+        original = self.store.read_original(self.sid)
+        result = self.store.initialize_relationship_metrics(
+            self.sid, before["version"], {"NPC_001": self.additions}, self.basis
+        )
+        stats = _relation_stats(self.file(self.path).read_text(), self.path)
+        self.assertEqual(len(stats), 7)
+        self.assertEqual({key: stats[key] for key in ("любовь", "тревога", "раздражение")},
+                         {"любовь": (85, 0), "тревога": (90, 0), "раздражение": (65, 0)})
+        self.assertTrue(self.file(self.path).read_text().endswith(self.partial_relations))
+        self.assertEqual(result["turn"], 10)
+        self.assertEqual(result["version"], before["version"] + 1)
+        self.assertFalse(result["gameplay_turn_added"])
+        self.assertEqual(self.file("system/turns.jsonl").read_bytes(), journal)
+        self.assertEqual(self.store.read_original(self.sid), original)
+        self.assertEqual(result["metrics_sources"]["NPC_001"]["kind"], "completed")
+        self.assertEqual(self.store.setup_report(self.sid)["relation_errors"], [])
+        repeated = self.store.initialize_relationship_metrics(self.sid, result["version"], {"NPC_001": self.additions}, self.basis)
+        self.assertEqual(repeated["version"], result["version"])
+
+    def test_completion_cannot_invent_or_overwrite_scales_and_is_atomic(self):
+        self.partial_author_setup()
+        before = self.store.read_state(self.sid)
+        for metrics in ({"любовь": 99}, {"интерес": 50}, {"ответственность": 90}):
+            with self.subTest(metrics=metrics), self.assertRaises(StateError):
+                self.store.initialize_relationship_metrics(self.sid, before["version"], {"NPC_001": metrics}, self.basis)
+            self.assertEqual(self.store.read_state(self.sid), before)
+            self.assertEqual(self.file(self.path).read_text(), self.partial_relations)
+
+    def test_completion_prefers_historical_values_for_missing_scales(self):
+        self.partial_author_setup()
+        first = self.store.initialize_relationship_metrics(self.sid, self.meta["version"], {"NPC_001": self.additions}, self.basis)
+        self.meta = self.store._write_revision(self.store._root(self.sid), first, {self.path: self.partial_relations})
+        wrong = {**self.additions, "привязанность": 10}
+        with self.assertRaisesRegex(StateError, "Найдено прежнее значение"):
+            self.store.initialize_relationship_metrics(self.sid, self.meta["version"], {"NPC_001": wrong}, self.basis)
+        right = self.store.initialize_relationship_metrics(self.sid, self.meta["version"], {"NPC_001": self.additions}, self.basis)
+        self.assertEqual(len(right["metrics_sources"]["NPC_001"]["restored_from"]), 4)
+
+    def test_no_numeric_relationship_file_for_an_npc_without_a_card(self):
+        with self.assertRaisesRegex(StateError, "нет карточки"):
+            _validate_relation_updates(self.store._revision(self.store._root(self.sid), self.meta["version"]),
+                                       {"characters/NPC_GUARD/relations.md": "- раздражение 16/+1"})
 
 
 if __name__ == "__main__":
