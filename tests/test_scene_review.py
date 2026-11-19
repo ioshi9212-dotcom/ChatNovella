@@ -52,11 +52,11 @@ class TestSceneReview(unittest.TestCase):
             packet_id=packet["packet_id"],
         )
 
-    def review(self, payload, report=None, labels=None):
+    def review(self, payload, report=None, labels=None, card=None):
         report = relationship_report(report or checks(), labels or {}, payload["files"])
         return self.store.review_scene(**payload, checks=report,
                                        relationship_labels=labels or {},
-                                       scorecard=scorecard(payload["reader_text"]))
+                                       scorecard=scorecard(payload["reader_text"]) if card is None else card)
 
     def test_review_rejects_missing_pre_scene_plan(self):
         packet = self.store.prepare_turn(self.sid, [])
@@ -79,6 +79,44 @@ class TestSceneReview(unittest.TestCase):
         self.assertIn("system/npc_scout", whole)
         self.assertIn("NPC_001", whole)
         self.assertIn("Подтверждённый персонаж Сайлас", whole)
+
+    def test_scorecard_is_mandatory_and_failing_score_blocks_save(self):
+        payload = self.payload()
+        missing = self.review(payload, card={})
+        self.assertFalse(missing["approved"])
+        self.assertTrue(any("scorecard" in item for item in missing["issues"]))
+        self.assertIsNone(missing["review_id"])
+
+        card = scorecard(payload["reader_text"])
+        for name in ("pacing", "genre_detail"):
+            card["axes"][name]["score"] = 1
+            card["axes"][name]["issue"] = "У значимого фрагмента недостаёт конкретики и внутреннего развития."
+            card["axes"][name]["fix"] = "Дополнить важные действия и убрать неоправданно растянутые фразы."
+        low = self.review(payload, card=card)
+        self.assertFalse(low["approved"])
+        self.assertEqual(low["quality_score"]["total"], 10)
+        with self.assertRaises(StateError):
+            self.store.commit_turn(**payload, review_id=low["review_id"])
+        high = self.review(payload)
+        self.assertTrue(high["approved"], high)
+        self.assertEqual(high["quality_score"]["total"], 12)
+        saved = self.store.commit_turn(**payload, review_id=high["review_id"])
+        self.assertEqual(saved["turn"], 1)
+
+    def test_fatal_scorecard_error_blocks_twelve_points_until_correction(self):
+        payload = self.payload()
+        card = scorecard(payload["reader_text"])
+        card["critical"]["unjustified_omission_or_fade"]["violation"] = True
+        card["critical"]["unjustified_omission_or_fade"]["reason"] = (
+            "При переписывании было затемнено важное действие в центре сцены."
+        )
+        failed = self.review(payload, card=card)
+        self.assertFalse(failed["approved"])
+        self.assertEqual(failed["quality_score"]["total"], 12)
+        self.assertTrue(failed["quality_score"]["critical"])
+        passed = self.review(payload)
+        self.assertTrue(passed["approved"], passed)
+        self.assertEqual(passed["correction_pass"], 1)
 
     def test_save_requires_approval_for_exact_text_files_chronology_and_packet(self):
         payload = self.payload()
