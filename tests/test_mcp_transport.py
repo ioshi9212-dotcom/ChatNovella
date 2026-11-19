@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import patch
 
 from starlette.testclient import TestClient
-from review_helpers import checks, scene
+from review_helpers import checks, scene, scorecard
 
 
 class TestMCPTransport(unittest.TestCase):
@@ -90,7 +90,7 @@ class TestMCPTransport(unittest.TestCase):
                 "narration": scene(), "files": {"state/scene.md": "Рината осмотрела зал."},
                 "timeline_events": [], "timeline_no_change_reason": "Нет новых значимых сюжетных фактов",
             }
-            reviewed = call("review_novella_scene", {**payload, "checks": checks(), "relationship_labels": {}})
+            reviewed = call("review_novella_scene", {**payload, "checks": checks(), "relationship_labels": {}, "scorecard": scorecard(payload["reader_text"])})
             self.assertTrue(reviewed["approved"], reviewed)
             saved = call("save_novella_turn", {**payload, "review_id": reviewed["review_id"]})
             self.assertEqual(saved["turn"], 1)
