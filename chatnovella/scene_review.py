@@ -9,8 +9,7 @@ REVIEW_CHECKS = (
     "canon", "pov", "npc", "continuity", "direction", "knowledge",
     "skin", "persistence",
 )
-# Revision attempts are unlimited; only a server-approved draft can be saved.
-MAX_CORRECTIONS = None
+MAX_CORRECTIONS = 2
 OPTION_HEADINGS = (
     "Что я могу сделать:", "Что я могу сказать:", "Что я могу подумать:",
 )
