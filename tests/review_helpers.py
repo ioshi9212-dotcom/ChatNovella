@@ -1,5 +1,6 @@
 """Complete scene fixtures for storage tests that used bare narration strings."""
 from chatnovella.scene_review import REVIEW_CHECKS
+from chatnovella.semantic_review import SEMANTIC_KEYS
 from chatnovella.store import StateError
 
 
@@ -32,6 +33,24 @@ def checks():
     return result
 
 
+
+
+def fake_semantic_reviewer(context):
+    """TEST ONLY: deterministic independent-review substitute, never used by app."""
+    assert "draft_scene" in context and "state" in context and "rules" in context
+    return {
+        "summary": "Тестовый отчёт о соответствии черновика без реального модельного вызова.",
+        "findings": {
+            key: {
+                "status": "na" if key in ("scene_depth",) else "pass",
+                "evidence": ("Нет поцелуев, хоррора или экшена, требующих иной детализации."
+                             if key == "scene_depth" else
+                             f"В тестовом черновике проверен пункт {key} по реальным файлам"),
+                "fix": "",
+            } for key in SEMANTIC_KEYS
+        },
+    }
+
 def reviewed_commit(store, session_id, expected_version, reader_text, narration,
                     files, timeline_events=None, timeline_no_change_reason="",
                     packet_id=None, relationship_labels=None,
@@ -53,6 +72,7 @@ def reviewed_commit(store, session_id, expected_version, reader_text, narration,
         "intended_shift": "Рината обнаруживает новое обстоятельство внутри зала",
         "possible_hook": "Свежий след у порога даёт непосредственное продолжение",
     })
+    store.semantic_reviewer = fake_semantic_reviewer
     result = store.review_scene(**payload, checks=checks(), relationship_labels=relationship_labels or {})
     if not result["approved"]:
         raise StateError("; ".join(result["issues"]))
