@@ -163,6 +163,20 @@ class TestSceneReview(unittest.TestCase):
         issues, _ = inspect_scene(scene(), checks(), {})
         self.assertEqual(issues, [])
 
+    def test_direction_requires_specific_progress_and_hook_evidence(self):
+        report = checks()
+        report["direction"]["evidence"] = "Сцена получилась интересной, в конце есть варианты."
+        issues, _ = inspect_scene(scene(), report, {})
+        self.assertTrue(any("review.direction" in issue for issue in issues))
+
+        report["direction"]["evidence"] = (
+            "Опора: конфликт с Эдрианом; "
+            "Сдвиг: Эдриан приехал к парковке, теперь разговор возможен; "
+            "Зацепка: на экране появилось сообщение о его присутствии внизу"
+        )
+        issues, _ = inspect_scene(scene(), report, {})
+        self.assertEqual(issues, [])
+
     def test_empty_generic_or_missing_semantic_results_cannot_pass(self):
         for report in ({}, {key: {"status": "pass", "evidence": "Все проверено"} for key in REVIEW_CHECKS},
                        {key: {"status": "pass", "evidence": "Одинаковое заверение во всех пунктах"} for key in REVIEW_CHECKS}):
