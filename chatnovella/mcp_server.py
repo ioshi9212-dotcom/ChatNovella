@@ -129,6 +129,9 @@ def prepare_novella_turn(
     observer: personality, abilities, knowledge, relations;
     message/mentioned: no card. need_past=true optionally for phone/observer.
     Always fetch ALL chunks before writing narrative.
+    For narrative generation: FIRST call this tool with participants=[] and
+    read all chunks; run plan_novella_scene BEFORE drafting, then call this
+    tool again with actual participants and read the final packet.
     Then apply engine/scene_review.md and call review_novella_scene.
     One initial draft plus at most two corrected submissions, no endless loop.
     """
@@ -183,6 +186,9 @@ def review_novella_scene(
     {"status":"pass" or "fail", "evidence":"concrete result, 12–350 chars"}.
     Check actual text against all loaded rules/cards; report flaws honestly.
     This is the model's semantic assessment, not a separate literary judge.
+    A pre-writing plan_novella_scene call is mandatory and must be registered
+    before this review. In direction evidence, quote exact text from the
+    narrative body for both the plot shift and the next-turn hook.
 
     relationship_labels maps each physical/phone/observer NPC ID to the exact
     visible name/description in its separate footer line. {} when none.
