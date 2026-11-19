@@ -564,7 +564,7 @@ class SessionStore:
             rev = self._revision(root, expected_version)
             arcs_content = (rev / "state/arcs.md").read_text(encoding="utf-8")
             for arc_id in arcs:
-                if not re.search(r"(?m)^##\\s+" + re.escape(arc_id) + r"\\b", arcs_content):
+                if not re.search(r"(?m)^##\s+" + re.escape(arc_id) + r"\b", arcs_content):
                     raise StateError(f"План: нет существующей арки или вопроса {arc_id}")
             for npc_id in npcs:
                 if not (rev / "characters" / npc_id / "core.md").is_file():
@@ -921,7 +921,7 @@ class SessionStore:
                     f = card.parent / section
                     if f.is_file():
                         fragments.append(section + ": " + f.read_text(encoding="utf-8")[:450])
-                index.append(npc + "\\n" + "\\n".join(fragments))
+                index.append(npc + "\n" + "\n".join(fragments))
             if index:
                 names.append("system/npc_scout")  # added separately as generated packet text
         for info in participants:
@@ -965,7 +965,7 @@ class SessionStore:
             if file.is_file():
                 parts.append((path, file.read_text(encoding="utf-8")))
         if not participants and index:
-            parts.append(("system/npc_scout", "\\n\\n".join(index)))
+            parts.append(("system/npc_scout", "\n\n".join(index)))
         packet = self._packet(session_id, meta["version"], parts, participants=participants)
         packet["engine_files"] = list(ENGINE_CONTEXT_FILES)
         packet["pre_save_review"] = (
