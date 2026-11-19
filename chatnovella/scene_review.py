@@ -94,6 +94,28 @@ def inspect_scene(
         issues.append("skin.body: художественная часть пуста")
     if any(re.match(r"^[—–]\s*\S", line) for line in body):
         issues.append("skin.dialogue: прямая речь без имени; используй **Имя** — реплика")
+    # A direction report must cite text that really occurs BEFORE the 3x3 list.
+    # This verifies evidence exists, NOT whether it is narratively significant.
+    direction = checks.get("direction") if isinstance(checks, dict) else None
+    if isinstance(direction, dict) and direction.get("status") == "pass":
+        report = direction.get("evidence", "")
+        matched = re.fullmatch(
+            r"Опора:\s*(.+?)\s*;\s*Сдвиг:\s*(.+?)\s*;\s*Зацепка:\s*(.+)",
+            report.strip(), re.I | re.S,
+        ) if isinstance(report, str) else None
+        if matched:
+            narrative = re.sub(r"\s+", " ", " ".join(body)).casefold()
+            quotes = [
+                re.sub(r"\s+", " ", matched.group(i).strip().strip('«»"')).casefold()
+                for i in (2, 3)
+            ]
+            if any(part not in narrative for part in quotes):
+                issues.append(
+                    "review.direction: сдвиг и зацепка должны быть точными "
+                    "фрагментами художественного текста, не вариантами 3x3"
+                )
+            if quotes[0] == quotes[1]:
+                issues.append("review.direction: одна и та же фраза не доказывает и сдвиг, и зацепку")
     for index, label in enumerate(OPTION_HEADINGS):
         start, end = positions[index], positions[index + 1]
         if lines[start] != label:
