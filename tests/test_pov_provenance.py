@@ -78,6 +78,21 @@ class TestPovProvenance(unittest.TestCase):
         )
         self.assertTrue(issues)
 
+    def test_negated_embrace_and_ordinary_admission_are_not_new_choices(self):
+        self.assertEqual(
+            detect_pov_decisions(
+                "Рина не обняла Эдриана. Она хотела обнять его, но не решилась."
+            ), [],
+        )
+        self.assertEqual(
+            detect_pov_decisions("Рината призналась, что замёрзла, и улыбнулась."), [],
+        )
+        self.assertEqual(
+            [entry["category"] for entry in detect_pov_decisions(
+                "Рината призналась ему в любви."
+            )], ["commitment"],
+        )
+
     def test_new_kiss_and_promise_need_separate_permissions(self):
         body = "Рина поцеловала Эдриана. Она пообещала ему остаться навсегда."
         found = detect_pov_decisions(body)
