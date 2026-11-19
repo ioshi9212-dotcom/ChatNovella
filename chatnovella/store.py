@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from chatnovella.scene_review import MAX_CORRECTIONS, REVIEW_CHECKS, inspect_scene
-from chatnovella.quality_scorecard import check_scorecard, QUALITY_AXES, MIN_SCORE
+from chatnovella.quality_scorecard import check_scorecard, copied_prose, QUALITY_AXES, MIN_SCORE
 
 STATE_FILES = (
     "state/scene.md", "state/locations.md", "state/roster.md",
@@ -688,6 +688,19 @@ class SessionStore:
             quality_issues, quality = check_scorecard(scorecard, narration, reader_text)
             issues.extend(quality_issues)
             rev = self._revision(root, expected_version)
+            journal_path = rev / "system/turns.jsonl"
+            if journal_path.is_file():
+                recent_entries = [
+                    json.loads(line) for line in journal_path.read_text(encoding="utf-8").splitlines()[-3:]
+                    if line.strip()
+                ]
+                for reused in copied_prose(
+                    narration, [entry.get("narration", "") for entry in recent_entries]
+                ):
+                    issues.append(
+                        "scorecard.pacing: повторён крупный абзац из недавней сцены; "
+                        "не заменяй сюжет повторным текстом: " + reused
+                    )
             try:
                 _validate_turn_payload(payload)
                 _validate_relation_updates(rev, files)
