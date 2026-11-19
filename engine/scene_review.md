@@ -84,6 +84,32 @@
    происходящего, которое должно быть показано. Осмысленный монтаж
    допустим, но не как способ избежать ключевого действия.
 
+Краткий каркас `scorecard` (заполняется **реальными** цитатами и
+индивидуальными основаниями, а не буквальными шаблонными значениями):
+
+```json
+{
+  "axes": {
+    "pov_autonomy": {"score": 2, "quote": "...", "basis": "...", "issue": "", "fix": ""},
+    "npc_character_initiative": {"score": 2, "quote": "...", "basis": "...", "issue": "", "fix": ""},
+    "plot_initiative": {"score": 2, "quote": "...", "basis": "...", "issue": "", "fix": ""},
+    "pacing": {"score": 2, "quote": "...", "basis": "...", "issue": "", "fix": ""},
+    "genre_detail": {"score": 2, "quote": "...", "basis": "...", "issue": "", "fix": ""},
+    "no_blurring_or_fade": {"score": 2, "quote": "...", "basis": "...", "issue": "", "fix": ""}
+  },
+  "critical": {
+    "pov_choice": {"violation": false, "reason": "..."},
+    "canon_and_knowledge": {"violation": false, "reason": "..."},
+    "relationship_consistency": {"violation": false, "reason": "..."},
+    "unjustified_omission_or_fade": {"violation": false, "reason": "..."}
+  },
+  "reader_trace": {
+    "input_quote": "...", "scene_quote": "...", "explanation": "..."
+  },
+  "fade_notes": []
+}
+```
+
 Обязательный `reader_trace` содержит `input_quote` (буквальная
 цитата из сообщения читателя), `scene_quote` (из сцены) и
 `explanation`, объясняющее реальное воплощение ввода и границы
