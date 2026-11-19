@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import patch
 
 from starlette.testclient import TestClient
-from review_helpers import checks, scene
+from review_helpers import checks, scene, fake_semantic_reviewer
 
 
 class TestMCPTransport(unittest.TestCase):
@@ -20,6 +20,7 @@ class TestMCPTransport(unittest.TestCase):
         }):
             from chatnovella import mcp_server
             self.server = importlib.reload(mcp_server)
+            self.server.store.semantic_reviewer = fake_semantic_reviewer
 
     def post(self, client, method, params=None, headers=None):
         return client.post("/mcp", headers={
