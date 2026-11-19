@@ -12,7 +12,7 @@ from typing import Any
 # Conjugations chosen to identify the POV as the *actor*, not an NPC who
 # embraced or struck her. Captures a limited number of common Russian forms.
 _ACTIONS = {
-    "embrace": re.compile(r"\b(?:обняла|обнимала|обнимает|обняв|обнимая|обниму|обнимет|обнять)\b", re.I),
+    "embrace": re.compile(r"\b(?:обняла|обнимала|обнимает|обняв|обнимая|обниму|обнимет)\b", re.I),
     "kiss": re.compile(r"\b(?:поцеловала|поцеловав|целует|целовала|поцелую|поцеловать|целуя)\b", re.I),
     "violence": re.compile(r"\b(?:ударила|ударив|врезала|пнула|пнув|толкнула|толкнув|дала\s+пощ[её]чину)\b", re.I),
     "commitment": re.compile(r"\b(?:пообещала|пообещав|поклялась|поклявшись|призналась)\b", re.I),
@@ -63,6 +63,18 @@ def detect_pov_decisions(body: str) -> list[dict[str, Any]]:
         recent_pov = bool(_POV_NAME.search(previous_narration))
         for category, matcher in _ACTIONS.items():
             for action in matcher.finditer(line):
+                # Negations and hypothetical infinitives do not record a deed.
+                if re.search(r"\bне\s+$", line[max(0, action.start() - 12):action.start()], re.I):
+                    continue
+                if category == "commitment" and action.group().casefold() == "призналась":
+                    # "Призналась, что замёрзла" is a normal conversational
+                    # response, not automatically a life-changing confession.
+                    tail = line[action.end():action.end() + 110]
+                    if not re.search(
+                        r"\b(?:в\s+любви|в\s+чувствах|в\s+предательстве|"
+                        r"в\s+убийстве|в\s+своей\s+тайне)\b", tail, re.I,
+                    ):
+                        continue
                 if _is_pov_actor(line, action.start(), recent_pov):
                     found.append({
                         "category": category,
