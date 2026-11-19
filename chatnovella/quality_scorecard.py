@@ -35,7 +35,8 @@ _FADE = re.compile(
     r"дальше\s+всё\s+произошло\s+само|"
     r"ночь\s+скрыла\s+(?:всё|все|остальное)|"
     r"темнота\s+скрыла\s+(?:всё|все|остальное)|"
-    r"остальное\s+осталось\s+за\s+кадром)\b", re.I
+    r"остальное\s+осталось\s+за\s+кадром|"
+    r"между\s+ними\s+(?:всё|все|что-то)\s+(?:изменилось|стало\s+иначе))\b", re.I
 )
 
 
@@ -76,6 +77,7 @@ def check_scorecard(
         return ["scorecard.axes: нужны все шесть направлений"], report
     total = 0
     quotes: list[str] = []
+    quote_spans: list[tuple[int, int]] = []
     for key in QUALITY_AXES:
         item = axes[key]
         if not isinstance(item, dict) or set(item) != {
@@ -94,8 +96,11 @@ def check_scorecard(
                 or _normalize(quote) not in body):
             issues.append(f"scorecard.{key}: нужна дословная цитата 18–280 символов из художественной части, не из вариантов")
         else:
-            quotes.append(_normalize(quote))
-            if key == "plot_initiative" and _normalize(quote) in reader:
+            normalized_quote = _normalize(quote)
+            quotes.append(normalized_quote)
+            at = body.find(normalized_quote)
+            quote_spans.append((at, at + len(normalized_quote)))
+            if key == "plot_initiative" and normalized_quote in reader:
                 issues.append(
                     "scorecard.plot_initiative: событие полностью процитировано из ввода читателя; "
                     "нужен самостоятельный поступок NPC или сдвиг мира"
@@ -111,6 +116,15 @@ def check_scorecard(
             issues.append(f"scorecard.{key}: обнаруженный дефект несовместим с оценкой 2/2")
     if len(set(quotes)) < 4:
         issues.append("scorecard.evidence: нужно не менее четырёх разных цитат, а не одно подтверждение на всё")
+    distinct_spans = 0
+    last_end = -1
+    # One sentence chopped into four overlapping quotes is not four proofs.
+    for start, end in sorted(quote_spans, key=lambda span: span[1]):
+        if start >= last_end:
+            distinct_spans += 1
+            last_end = end
+    if distinct_spans < 4:
+        issues.append("scorecard.evidence: нужно не менее четырёх непересекающихся фрагментов сцены; нарезка одной фразы на цитаты не считается")
     report["total"] = total
 
     critical = card["critical"]
