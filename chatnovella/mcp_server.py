@@ -185,7 +185,11 @@ def review_novella_scene(
     npc, continuity, direction, knowledge, skin, persistence. Each value is
     {"status":"pass" or "fail", "evidence":"concrete result, 12–350 chars"}.
     Check actual text against all loaded rules/cards; report flaws honestly.
-    This is the model's semantic assessment, not a separate literary judge.
+    The author's checks are ADDITIONAL and never grant approval alone:
+    the server calls a separate model to audit canon, relationships,
+    NPC character and initiative, POV presence and voice, plot movement,
+    pacing, genre-specific detail, originality, knowledge and world physics.
+    Requires OPENAI_API_KEY on Amvera; when unavailable, review cannot pass.
     A pre-writing plan_novella_scene call is mandatory and must be registered
     before this review. In direction evidence, quote exact text from the
     narrative body for both the plot shift and the next-turn hook.
@@ -195,10 +199,10 @@ def review_novella_scene(
     Server checks header, 3x3 options, footer and exact saved relation numbers.
     Pass exact intended save arguments, including files and chronology.
 
-    Initial draft is correction_pass=0, then at most TWO corrected submissions.
-    Fix all issues together. Same-request network retry is free; a new packet
-    does not reset the budget. If blocked, stop and state remaining issues.
-    Do not invent/alter reader_text to reset the limit. No flawed scene is saved.
+    If approved=false, read independent_review and issues, rewrite the
+    unpublished scene, then submit the NEW full draft for another review.
+    No arbitrary two-rewrite limit. Identical requests are cached.
+    Never save or publish a failed/unverified draft.
     approved=true returns review_id for save_novella_turn with identical inputs.
     """
     return store.review_scene(
