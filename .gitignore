@@ -5,3 +5,5 @@ __pycache__/
 *.pyc
 /data/
 local_data/
+.lite-data/
+ci_lite_data/

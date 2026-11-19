@@ -1,27 +1,23 @@
-name: Check ChatNovella
+name: Check ChatNovella Lite
 on:
   push:
-    branches: [main, feature/chatnovella-state-templates, feature/scene-quality-scorecard]
+    branches: [feature/chatnovella-lite]
   pull_request:
     branches: [main]
 
 jobs:
-  test:
+  lite:
     runs-on: ubuntu-latest
     steps:
-      - name: Check out source
-        uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Install server dependencies
-        run: python -m pip install -r requirements.txt
-      - name: Compile Python
-        run: python -m compileall -q chatnovella tests
-      - name: Run state tests
-        run: python -m unittest discover -s tests -v
-      - name: Verify MCP module starts without secrets
+      - run: python -m pip install -r requirements.txt
+      - run: python -m compileall -q chatnovella_lite tests_lite
+      - run: python -m unittest discover -s tests_lite -v
+      - run: python scripts/lite_smoke.py
+      - name: Import isolated test service
         env:
-          CHATNOVELLA_DATA_DIR: ./ci_local_data
-        run: python -c "from chatnovella.mcp_server import app; print('MCP ASGI import OK without token')"
+          CHATNOVELLA_LITE_DATA_DIR: ./ci_lite_data
+        run: python -c "from chatnovella_lite.server import app; assert app.openapi()['info']['title'] == 'ChatNovella Lite'"
