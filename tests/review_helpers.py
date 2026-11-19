@@ -94,7 +94,13 @@ def reviewed_commit(store, session_id, expected_version, reader_text, narration,
                     relationships="нет участвующих NPC"):
     payload = dict(
         session_id=session_id, expected_version=expected_version,
-        reader_text=reader_text, narration=scene(narration, relationships), files=files,
+        reader_text=reader_text,
+        narration=scene(narration, relationships).replace(
+            "Тонкая полоска света медленно прошла по нижнему краю двери.",
+            f"Тонкая полоска света медленно прошла по нижнему краю двери. "
+            f"На нижнем поле страницы стоял номер ревизии {expected_version}.",
+        ),
+        files=files,
         timeline_events=timeline_events,
         timeline_no_change_reason=timeline_no_change_reason, packet_id=packet_id,
     )
