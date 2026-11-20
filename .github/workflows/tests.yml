@@ -1,7 +1,7 @@
 name: Check ChatNovella Lite
 on:
   push:
-    branches: [feature/chatnovella-lite]
+    branches: [main, feature/chatnovella-lite]
   pull_request:
     branches: [main]
 

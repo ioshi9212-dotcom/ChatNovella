@@ -62,3 +62,11 @@ class TransportTests(unittest.TestCase):
         with TestClient(self.server.app) as c:
             r=c.post('/mcp',headers={'origin':'https://untrusted.example','accept':'application/json, text/event-stream'},json={'jsonrpc':'2.0','id':1,'method':'tools/list','params':{}})
             self.assertEqual(r.status_code,403)
+    def test_production_config_inherits_host_token_and_uses_persistent_lite_root(self):
+        import importlib
+        from chatnovella_lite import server
+        with patch.dict(os.environ,{'CHATNOVELLA_PUBLIC_HOST':'existing.amvera.tech','CHATNOVELLA_API_TOKEN':'y'*32},clear=True),patch('chatnovella_lite.store.Store') as factory:
+            reloaded=importlib.reload(server)
+            self.assertEqual(reloaded.HOST,'existing.amvera.tech')
+            self.assertEqual(reloaded.TOKEN,'y'*32)
+            self.assertEqual(factory.call_args.args[0],'/data/chatnovella-lite')

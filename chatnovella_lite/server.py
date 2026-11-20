@@ -18,10 +18,10 @@ from .models import Model, Turn, State, Relationships
 from .store import Store, Error
 
 BASE=Path(__file__).resolve().parents[1]
-TOKEN=os.getenv('CHATNOVELLA_LITE_API_TOKEN','')
-HOST=os.getenv('CHATNOVELLA_LITE_PUBLIC_HOST','localhost').strip().lower()
+TOKEN=os.getenv('CHATNOVELLA_LITE_API_TOKEN',os.getenv('CHATNOVELLA_API_TOKEN',''))
+HOST=os.getenv('CHATNOVELLA_LITE_PUBLIC_HOST',os.getenv('CHATNOVELLA_PUBLIC_HOST','chatnovella-yumikofv.waw0.amvera.tech')).strip().lower()
 if TOKEN and len(TOKEN)<24: raise RuntimeError('Lite token must have at least 24 characters')
-store=Store(os.getenv('CHATNOVELLA_LITE_DATA_DIR',str(BASE/'.lite-data')),BASE)
+store=Store(os.getenv('CHATNOVELLA_LITE_DATA_DIR','/data/chatnovella-lite'),BASE)
 mcp=FastMCP('ChatNovella Lite',instructions=(BASE/'docs/lite/INSTRUCTIONS.md').read_text(),
             stateless_http=True,json_response=True,
             transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=True,
@@ -170,7 +170,7 @@ def openapi():
     schema=_original_openapi()
     schema.setdefault('components',{}).setdefault('securitySchemes',{})['BearerAuth']={'type':'http','scheme':'bearer'}
     if TOKEN: schema['security']=[{'BearerAuth':[]}]
-    url=os.getenv('CHATNOVELLA_LITE_PUBLIC_URL','')
+    url=os.getenv('CHATNOVELLA_LITE_PUBLIC_URL','https://'+HOST if HOST!='localhost' else '')
     if url: schema['servers']=[{'url':url.rstrip('/')}]
     return schema
 app.openapi=openapi
