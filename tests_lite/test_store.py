@@ -305,3 +305,23 @@ class StoreTests(unittest.TestCase):
         with self.assertRaises(Error): self.store.amend_canon(self.sid,updated['version'],'Другой канон.','Да','Переназначение',{'NPC_001':'Другой Рэй'})
         restarted=Store(self.tmp.name,BASE)
         self.assertEqual(restarted.status(self.sid)['registry']['NPC_004'],'Кай')
+
+    def test_16k_chunks_and_existing_12k_packet_survive_rollout(self):
+        p,_=self.packet(read=False)
+        self.assertEqual(p['chunk_size'],16000)
+        first=self.store.read_chunk(self.sid,p['packet_id'],0)
+        self.assertEqual(len(first['text']),16000)
+        meta_path=self.store.path(self.sid)/'system/meta.json'
+        meta=json.loads(meta_path.read_text());packet=meta['packets'][p['packet_id']]
+        packet.pop('chunk_size')
+        text=packet['payload']
+        legacy=[text[i:i+12000] for i in range(0,len(text),12000)]
+        packet['hashes']=[digest(c) for c in legacy];packet['delivered']=[]
+        meta_path.write_text(dump(meta))
+        restored=''
+        for i,expected in enumerate(legacy):
+            c=self.store.read_chunk(self.sid,p['packet_id'],i)
+            self.assertEqual(c['text'],expected)
+            self.assertEqual(c['sha256'],digest(expected))
+            restored+=c['text']
+        self.assertEqual(restored,text)

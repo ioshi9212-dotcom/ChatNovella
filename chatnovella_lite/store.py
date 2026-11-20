@@ -21,7 +21,7 @@ from .models import State, Relationships, RelationChange, Knowledge, Turn
 
 SID = re.compile(r'^LITE_[a-f0-9]{32}$')
 NPC = re.compile(r'^NPC_[0-9]{3,}$')
-CHUNK_SIZE = 12000
+CHUNK_SIZE = 16000
 
 class Error(ValueError):
     pass
@@ -341,20 +341,22 @@ class Store:
             chunks=[payload[i:i+CHUNK_SIZE] for i in range(0,len(payload),CHUNK_SIZE)]
             packet_id=secrets.token_hex(16)
             packet={'version':meta['version'],'kind':kind,'reader_text':reader_text,'participants':participants,
-                    'payload':payload,'hashes':[digest(c) for c in chunks],'delivered':[],'files':{k:digest(v) for k,v in pieces.items()}}
+                    'payload':payload,'chunk_size':CHUNK_SIZE,'hashes':[digest(c) for c in chunks],'delivered':[],'files':{k:digest(v) for k,v in pieces.items()}}
             # Keep only latest packets; bounded metadata, never delete scene history.
             meta['packets']={k:v for k,v in list(meta['packets'].items())[-3:] if v['version']==meta['version']}
             meta['packets'][packet_id]=packet
             atomic(path/'system/meta.json',dump(meta))
             return {'packet_id':packet_id,'version':meta['version'],'chunk_count':len(chunks),'sha256':digest(payload),
-                    'chunk_hashes':packet['hashes'],'file_hashes':packet['files'],'characters':len(payload),'participants':participants,'audit_due':meta['audit_due']}
+                    'chunk_size':CHUNK_SIZE,'chunk_hashes':packet['hashes'],'file_hashes':packet['files'],'characters':len(payload),'participants':participants,'audit_due':meta['audit_due']}
 
     def read_chunk(self,sid,packet_id,index):
         with self.locked(sid) as (path,meta):
             packet=meta['packets'].get(packet_id)
             if not packet or packet['version']!=meta['version']: raise Error('Expired packet; prepare again')
             if type(index) is not int or not 0<=index<len(packet['hashes']): raise Error('Invalid chunk index')
-            text=packet['payload'][index*CHUNK_SIZE:(index+1)*CHUNK_SIZE]
+            # Already-issued packets retain their original boundaries after rollout.
+            size=packet.get('chunk_size',12000)
+            text=packet['payload'][index*size:(index+1)*size]
             packet['delivered']=sorted(set(packet['delivered'])|{index})
             atomic(path/'system/meta.json',dump(meta))
             return {'index':index,'text':text,'sha256':digest(text),'version':meta['version']}
@@ -509,7 +511,7 @@ class Store:
             # Reuse lossless packets for arbitrarily large archive queries.
             pid=secrets.token_hex(16)
             chunks=[text[i:i+CHUNK_SIZE] for i in range(0,len(text),CHUNK_SIZE)]
-            meta['packets'][pid]={'kind':'history','version':meta['version'],'payload':text,'hashes':[digest(c) for c in chunks],'delivered':[]}
+            meta['packets'][pid]={'kind':'history','version':meta['version'],'payload':text,'chunk_size':CHUNK_SIZE,'hashes':[digest(c) for c in chunks],'delivered':[]}
             while len(meta['packets'])>4: del meta['packets'][next(iter(meta['packets']))]
             atomic(path/'system/meta.json',dump(meta))
-            return {'packet_id':pid,'chunk_count':len(chunks),'chunk_hashes':[digest(c) for c in chunks],'sha256':digest(text),'turns':len(rows)}
+            return {'packet_id':pid,'chunk_count':len(chunks),'chunk_size':CHUNK_SIZE,'chunk_hashes':[digest(c) for c in chunks],'sha256':digest(text),'turns':len(rows)}
