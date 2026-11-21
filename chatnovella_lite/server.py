@@ -56,7 +56,7 @@ def amend_lite_canon(session_id:str,expected_version:int,novel_text:str,reader_c
 
 @mcp.tool()
 def prepare_lite_context(session_id:str,reader_text:str,participants:list[str],kind:str='turn') -> dict[str,Any]:
-    """Load full Skin Builder EVERY new turn: it supplies style; previous scenes supply facts/continuity only. Read all chunks once; reuse current context for writing and one brief final check, without repeated full reviews. Includes canon, rules, relations/state/timeline and 3 scenes. kind=canon for setup; kind=audit at checkpoints. Load entering NPC IDs before writing."""
+    """Prepare a fresh full context every turn, including current full Skin Builder, canon, state, relations, timeline and 3 scenes. Past scenes are facts and continuity only, not style or direction. kind=canon for setup; kind=audit at checkpoints. Load entering NPC IDs before writing."""
     return store.prepare(session_id,reader_text,participants,kind)
 
 @mcp.tool()
@@ -66,7 +66,7 @@ def read_lite_chunk(session_id:str,packet_id:str,index:int) -> dict[str,Any]:
 
 @mcp.tool()
 def save_lite_turn(session_id:str,turn:Turn) -> dict[str,Any]:
-    """Write by the current full Skin Builder. Before saving, make one brief check and local corrections using already loaded context; no repeated full review or reload for review. Reject stale engine context. Atomically persist scene plus state and justified memory/relationship/events. Publish returned narration only after saved=true. Reuse request_id on retry."""
+    """Write directly by the current Skin Builder, not past scenes; no additional repeated full style reviews. Atomically persist scene plus state and justified memory/relationship/events. Publish narration only after saved=true. Reuse request_id on retry."""
     return store.commit(session_id,**turn.model_dump())
 
 @mcp.tool()

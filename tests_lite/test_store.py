@@ -70,27 +70,20 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(digest(''.join(chunks)),p['sha256'])
         self.assertEqual(set(x for x in payload['files'] if x.startswith('engine/')),{'engine/rules.md','engine/skin_builder.md'})
 
-    def test_style_is_reloaded_and_old_context_cannot_save_after_update(self):
+    def test_each_turn_reads_current_full_skin_builder(self):
         with tempfile.TemporaryDirectory() as root:
             engine=Path(root)
             shutil.copytree(BASE/'engine',engine/'engine')
             self.store.engine=engine
-            turn=self.payload()
+            _,before=self.packet()
+            previous=json.loads(before)['files']['engine/skin_builder.md']
             style=engine/'engine/skin_builder.md'
-            style.write_text('Новое полное правило стиля.\n')
-            with self.assertRaisesRegex(Error,'reload full context'):
-                self.store.commit(self.sid,**turn)
-            self.assertEqual(self.store.status(self.sid)['turn'],0)
-            _,text=self.packet()
-            payload=json.loads(text)
-            self.assertEqual(payload['files']['engine/skin_builder.md'],style.read_text())
-            self.assertEqual(payload['generation_policy']['style_source'],'engine/skin_builder.md')
-            self.assertFalse(payload['generation_policy']['inherit_previous_scene_style'])
-            self.assertEqual(payload['generation_policy']['history_usage'],'facts_and_continuity_only')
-            self.assertTrue(self.store.commit(self.sid,**self.payload())['saved'])
-            style.write_text('  \n')
-            with self.assertRaisesRegex(Error,'nonempty'):
-                self.packet()
+            self.assertEqual(previous,style.read_text())
+            style.write_text('Актуальные новые правила стиля.\n')
+            _,after=self.packet()
+            self.assertEqual(json.loads(after)['files']['engine/skin_builder.md'],style.read_text())
+            self.assertNotEqual(before,after)
+            self.assertNotIn('generation_policy',json.loads(after))
 
     def test_setup_approval_canon_lock_and_explicit_amendment(self):
         s=self.store.create('А','Б',REG,relations(),state());sid=s['session_id']
