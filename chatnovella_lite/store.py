@@ -27,6 +27,8 @@ GENERATION_POLICY = {
     'history_usage': 'facts_and_continuity_only',
     'reload_full_style_each_turn': True,
     'check_before_save': True,
+    'review_mode': 'single_brief_check',
+    'reload_context_for_review': False,
     'inherit_previous_scene_style': False,
 }
 
