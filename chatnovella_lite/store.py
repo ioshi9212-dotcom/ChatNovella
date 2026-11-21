@@ -22,6 +22,13 @@ from .models import State, Relationships, RelationChange, Knowledge, Turn
 SID = re.compile(r'^LITE_[a-f0-9]{32}$')
 NPC = re.compile(r'^NPC_[0-9]{3,}$')
 CHUNK_SIZE = 16000
+GENERATION_POLICY = {
+    'style_source': 'engine/skin_builder.md',
+    'history_usage': 'facts_and_continuity_only',
+    'reload_full_style_each_turn': True,
+    'check_before_save': True,
+    'inherit_previous_scene_style': False,
+}
 
 class Error(ValueError):
     pass
@@ -331,13 +338,16 @@ class Store:
                 if 60 in meta['audit_due']: participants=sorted(set(meta['registry'])-{'POV_001'})
             else: scope=rows[-3:]
             pieces={name:(self.engine/name).read_bytes().decode('utf-8') for name in ('engine/rules.md','engine/skin_builder.md')}
+            if any(not text.strip() for text in pieces.values()):
+                raise Error('Full nonempty engine rules and Skin Builder are required')
             pieces.update({name:(path/name).read_bytes().decode('utf-8') for name in ('novel.md','relationships.md','state.md','timeline.md')})
             if kind=='canon': pieces['original.md']=(path/'original.md').read_bytes().decode('utf-8')
             pieces['recent_scenes.json']=dump([{'turn':r['turn'],'reader_text':r['reader_text'],'narration':r['narration']} for r in scope])
             for cid in participants:
                 name=f'knowledge/{cid}.md'
                 if (path/name).exists(): pieces[name]=(path/name).read_bytes().decode('utf-8')
-            payload=dump({'kind':kind,'reader_text':reader_text,'participants':participants,'audit_due':meta['audit_due'],'files':pieces})
+            payload=dump({'kind':kind,'reader_text':reader_text,'participants':participants,'audit_due':meta['audit_due'],'files':pieces,
+                          'generation_policy':GENERATION_POLICY})
             chunks=[payload[i:i+CHUNK_SIZE] for i in range(0,len(payload),CHUNK_SIZE)]
             packet_id=secrets.token_hex(16)
             packet={'version':meta['version'],'kind':kind,'reader_text':reader_text,'participants':participants,
@@ -383,6 +393,14 @@ class Store:
             self.version(meta,data['expected_version'])
             if not meta['approved'] or meta['audit_due']: raise Error('Approval or audit required')
             packet=self.receipt(meta,data['packet_id'],data['chunk_hashes'],'turn')
+            for name in ('engine/rules.md','engine/skin_builder.md'):
+                current=(self.engine/name).read_bytes().decode('utf-8')
+                if not current.strip() or packet['files'].get(name)!=digest(current):
+                    raise Error('Engine rules or Skin Builder changed; reload full context and recheck the scene')
+            for name in ('engine/rules.md','engine/skin_builder.md'):
+                current=(self.engine/name).read_bytes().decode('utf-8')
+                if not current.strip() or digest(current)!=packet['files'].get(name):
+                    raise Error('Engine rules or Skin Builder changed; reload full context and rewrite before saving')
             if packet['reader_text']!=data['reader_text']: raise Error('Reader input differs from prepared input')
             if not set(data['participants'])<=set(packet['participants']): raise Error('Load entering NPC knowledge before writing the scene')
             if len(data['participants'])!=len(set(data['participants'])): raise Error('Duplicate participant')
