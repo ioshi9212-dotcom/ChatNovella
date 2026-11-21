@@ -397,10 +397,6 @@ class Store:
                 current=(self.engine/name).read_bytes().decode('utf-8')
                 if not current.strip() or packet['files'].get(name)!=digest(current):
                     raise Error('Engine rules or Skin Builder changed; reload full context and recheck the scene')
-            for name in ('engine/rules.md','engine/skin_builder.md'):
-                current=(self.engine/name).read_bytes().decode('utf-8')
-                if not current.strip() or digest(current)!=packet['files'].get(name):
-                    raise Error('Engine rules or Skin Builder changed; reload full context and rewrite before saving')
             if packet['reader_text']!=data['reader_text']: raise Error('Reader input differs from prepared input')
             if not set(data['participants'])<=set(packet['participants']): raise Error('Load entering NPC knowledge before writing the scene')
             if len(data['participants'])!=len(set(data['participants'])): raise Error('Duplicate participant')
