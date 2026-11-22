@@ -44,6 +44,13 @@ class StoreTests(unittest.TestCase):
            'participants':participants or ['NPC_001'],'state_patch':{'unfinished':[]},'relations':[],'knowledge':[],
            'events':[],'no_event_reason':'Только осмотр мебели без значимых событий.'}
         d.update(changes)
+        for event in d['events']:
+            event.setdefault('significance','major_consequence')
+            event.setdefault('significance_reason','Это важное и долговременное изменение истории.')
+        if 'knowledge_review' not in changes:
+            owners={entry['npc_id'] for entry in d['knowledge']}
+            d['knowledge_review']={cid:('recorded' if cid in owners else 'none')
+                                   for cid in set(d['participants']) | owners}
         return d
     def audit(self):
         p,text=self.packet('',kind='audit')
@@ -130,7 +137,7 @@ class StoreTests(unittest.TestCase):
         quote='Рэй услышал по телефону: Джун ушёл.'
         d=self.payload(narration=quote,knowledge=[dict(npc_id='NPC_001',fact='Джун ушёл.',status='mistaken',source_kind='phone',source_ids=['NPC_002'],source='Джун сказал в звонке.',evidence=quote)])
         self.store.commit(self.sid,**d)
-        self.assertFalse((self.store.path(self.sid)/'knowledge/NPC_002.md').exists())
+        self.assertEqual(parse_document(self.read('knowledge/NPC_002.md')),[])
         old=self.read('knowledge/NPC_001.md')
         self.store.commit(self.sid,**self.payload(narration='Рэй увидел Джуна в дверях.',knowledge=[dict(npc_id='NPC_001',fact='Джун не ушёл.',status='refuted',source_kind='witnessed',source_ids=['NPC_002'],source='Лично увидел его.',evidence='Рэй увидел Джуна в дверях.',supersedes=0)]))
         entries=parse_document(self.read('knowledge/NPC_001.md'))
@@ -232,8 +239,9 @@ class StoreTests(unittest.TestCase):
             d=self.payload(narration=f'Полная сцена {i}. Рэй прочитал страницу архива.',participants=['NPC_001','NPC_003'] if i==1 else ['NPC_001'])
             if i==1:
                 d['participants']=['NPC_001']
-                d['events']=[dict(date=None,participants=['NPC_003'],event='Мики прочитал табло отмены поезда.',consequence='Узнал об отмене.')]
+                d['events']=[dict(date=None,participants=['NPC_003'],event='Мики прочитал табло отмены поезда.',consequence='Узнал об отмене.',significance='major_consequence',significance_reason='Отмена меняет запланированное путешествие героев.')]
                 d['knowledge']=[dict(npc_id='NPC_003',fact='Поезд отменён.',status='knows',source_kind='offscreen',source_ids=[],source='Прочитал табло.',evidence='Мики прочитал табло',event_index=0)]
+                d['knowledge_review']['NPC_003']='recorded'
             self.store.commit(self.sid,**d)
             if i%15==0:
                 with self.assertRaises(Error): self.packet()
@@ -242,7 +250,7 @@ class StoreTests(unittest.TestCase):
                 scenes=json.loads(data['files']['recent_scenes.json'])
                 self.assertEqual(len(scenes),15)
                 self.assertEqual(scenes[0]['turn'],i-14)
-                if i==30: self.assertNotIn('knowledge/NPC_003.md',data['files'])
+                if i==30: self.assertNotIn('knowledge/NPC_003.md',data['files'])  # owner not in this audit's 15-turn scope
                 if i==60:
                     self.assertEqual(set(p['participants']),set(REG)-{'POV_001'})
                     self.assertIn('Поезд отменён.',data['files']['knowledge/NPC_003.md'])
@@ -268,7 +276,7 @@ class StoreTests(unittest.TestCase):
         saved=self.store.commit(self.sid,**d)
         self.store.rollback(self.sid,saved['version'],d['request_id'],'Вернуться к прежнему варианту.')
         for name in names: self.assertEqual(self.read(name),old[name])
-        self.assertFalse((self.store.path(self.sid)/'knowledge/NPC_001.md').exists())
+        self.assertEqual(parse_document(self.read('knowledge/NPC_001.md')),[])
         self.assertEqual(len(self.store.history(self.store.path(self.sid))),2)
 
     def test_concurrent_requests_one_version_only_one_turn(self):
@@ -317,6 +325,7 @@ class StoreTests(unittest.TestCase):
         old=self.store.status(self.sid)
         updated=self.store.amend_canon(self.sid,old['version'],'Полная анкета. Рина пришла в библиотеку. Новый архивариус: Кай.','Разрешаю добавить Кая.','Новый постоянный персонаж.',{'NPC_004':'Кай'})
         self.assertEqual(updated['registry']['NPC_004'],'Кай')
+        self.assertEqual(parse_document(self.read('knowledge/NPC_004.md')),[])
         for cid,name in REG.items(): self.assertEqual(updated['registry'][cid],name)
         with self.assertRaises(Error): self.store.amend_canon(self.sid,updated['version'],'Другой канон.','Да','Переназначение',{'NPC_001':'Другой Рэй'})
         restarted=Store(self.tmp.name,BASE)
