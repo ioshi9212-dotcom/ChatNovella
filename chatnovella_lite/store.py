@@ -361,7 +361,7 @@ class Store:
                 participants=sorted(set(cid for row in scope for cid in row['participants']))
                 affected=set(participants)
                 for row in scope:
-                    affected.update(entry['npc_id'] for entry in row.get('knowledge',[]))
+                    affected.update(entry['npc_id'] for entry in row.get('knowledge',[]) if entry['npc_id']!='POV_001')
                     affected.update(cid for event in row.get('events',[]) for cid in event['participants'] if cid!='POV_001')
                     affected.update(change['source'] for change in row.get('relations',[]))
                     affected.update(change['target'] for change in row.get('relations',[]) if change['target']!='POV_001')
@@ -434,7 +434,7 @@ class Store:
             owners={entry['npc_id'] for entry in data['knowledge']}
             reviewed={'POV_001'} | set(data['participants']) | owners
             if set(data['knowledge_review']) != reviewed:
-                raise Error('knowledge_review must cover every participating NPC and offscreen knowledge owner')
+                raise Error('knowledge_review must cover POV_001, every participating NPC and every offscreen knowledge owner')
             for cid in reviewed:
                 if cid not in meta['registry']:
                     raise Error('Unknown knowledge-review owner')
