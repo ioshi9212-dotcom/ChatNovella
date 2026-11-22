@@ -1,0 +1,23 @@
+{
+  "name": "dev-6afd39aad9808191bf94bb81e3c2f394",
+  "version": "1.0.14",
+  "description": "ChatNovella Amvera",
+  "author": {
+    "name": "App developer"
+  },
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "capabilities": [],
+        "category": "Other",
+        "defaultPrompt": null,
+        "developerName": "App developer",
+        "displayName": "ChatNovella Amvera",
+        "longDescription": "ChatNovella Amvera",
+        "shortDescription": "ChatNovella Amvera"
+      },
+      "apps": "./.app.json"
+    }
+  }
+}
