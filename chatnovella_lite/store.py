@@ -22,6 +22,43 @@ from .models import State, Relationships, RelationChange, Knowledge, Turn
 SID = re.compile(r'^LITE_[a-f0-9]{32}$')
 NPC = re.compile(r'^NPC_[0-9]{3,}$')
 CHUNK_SIZE = 16000
+# Reject only explicit epistemic assertions introduced by a NEW scene-state patch.
+# Already-stored legacy state is not silently changed; it needs a reviewed repair.
+_STATE_KNOWLEDGE = re.compile(
+    r'(?iu)\b(?:не\s+зна(?:ет|ют|л[аи]?|ли)|зна(?:ет|ют|л[аи]?|ли)|'
+    r'узна(?:л[аи]?|ли)|увидел(?:а|и)?|видел(?:а|и)?|'
+    r'услышал(?:а|и)?|слышал(?:а|и)?|'
+    r'помнит|помнят|помнил(?:а|и)?|известно\s+(?:ему|ей|им)|'
+    r'осведомл[её]н(?:а|ы)?)\b'
+)
+
+def norm(text):
+    return ' '.join(str(text).casefold().replace('ё', 'е').split())
+
+def check_state_patch_scope(patch):
+    """State is the current scene, not a second NPC memory store."""
+    if not isinstance(patch, dict):
+        raise Error('state_patch must be an object')
+    def scan(value, field):
+        if isinstance(value, str):
+            if _STATE_KNOWLEDGE.search(value):
+                raise Error(f'NPC knowledge found in state_patch.{field}; use knowledge for its owner ID')
+        elif isinstance(value, list):
+            for item in value: scan(item, field)
+        elif isinstance(value, dict):
+            for key, item in value.items(): scan(item, field + '.' + key)
+    for key in ('unfinished', 'objects', 'remote'):
+        if key in patch: scan(patch[key], key)
+    for key in ('pov', 'present'):
+        if key in patch and isinstance(patch[key], dict):
+            if key == 'pov':
+                actors = {'pov': patch[key]}
+            else:
+                actors = patch[key]
+            for cid, actor in actors.items():
+                if isinstance(actor, dict):
+                    for field in ('unfinished', 'physical'):
+                        if field in actor: scan(actor[field], key + '.' + cid + '.' + field)
 
 class Error(ValueError):
     pass
@@ -174,6 +211,11 @@ class Store:
             files={'original.md':original_text,'novel.md':self.canon(novel_text,registry),
                    'relationships.md':document('Отношения',rel),'state.md':document('Состояние',state),
                    'timeline.md':'# Хронология игровых событий\n','history.jsonl':''}
+            # Personal acquisition logs exist for every permanent NPC from day one.
+            # The canonical biography remains only in novel.md.
+            for cid in registry:
+                if NPC.fullmatch(cid):
+                    files[f'knowledge/{cid}.md']=document('Приобретённые знания',[])
             self.materialize(tmp,files)
             meta={'session_id':sid,'version':1,'turn':0,'approved':False,'canon_hash':digest(files['novel.md']),
                   'original_hash':digest(original_text),'registry':registry,'audit_due':[],
@@ -236,7 +278,10 @@ class Store:
             new=deepcopy(meta)
             new.update(version=meta['version']+1,canon_hash=digest(text),packets={},registry=registry)
             new['operations'].append({'kind':'canon_amendment','old_registry':meta['registry'],'old_text':(path/'novel.md').read_bytes().decode('utf-8'),'new_hash':new['canon_hash'],'reason':reason,'confirmation':reader_confirmation})
-            self.transaction(path,meta,{'novel.md':text},new)
+            files={'novel.md':text}
+            for cid in (registry_additions or {}):
+                files[f'knowledge/{cid}.md']=document('Приобретённые знания',[])
+            self.transaction(path,meta,files,new)
             return self.status_of(new)
 
     @staticmethod
@@ -386,6 +431,19 @@ class Store:
             if packet['reader_text']!=data['reader_text']: raise Error('Reader input differs from prepared input')
             if not set(data['participants'])<=set(packet['participants']): raise Error('Load entering NPC knowledge before writing the scene')
             if len(data['participants'])!=len(set(data['participants'])): raise Error('Duplicate participant')
+            # Catch knowledge smuggled into scene state, but never rewrite legacy
+            # state automatically: historical repairs must be author-reviewed.
+            check_state_patch_scope(data['state_patch'])
+            owners={entry['npc_id'] for entry in data['knowledge']}
+            reviewed=set(data['participants']) | owners
+            if set(data['knowledge_review']) != reviewed:
+                raise Error('knowledge_review must cover every participating NPC and offscreen knowledge owner')
+            for cid in reviewed:
+                if cid not in meta['registry'] or cid=='POV_001':
+                    raise Error('Unknown knowledge-review owner')
+                has_entries=cid in owners
+                if (data['knowledge_review'][cid]=='recorded') != has_entries:
+                    raise Error(f'Knowledge review for {cid} disagrees with personal-memory entries')
             before_state=parse_document((path/'state.md').read_bytes().decode('utf-8'))
             state=merge(before_state,data['state_patch'])
             # Membership dictionaries are full replacements when supplied;
@@ -408,7 +466,18 @@ class Store:
             turn=state['turn']
             if not data['events'] and not data['no_event_reason'].strip(): raise Error('Provide events or explain why no significant event occurred')
             timeline=(path/'timeline.md').read_bytes().decode('utf-8')
+            # Reject exact repeat milestones instead of endlessly appending them.
+            previous_events=set()
+            for fragment in re.findall(r'```json\n(.*?)\n```',timeline,re.S):
+                try: prior_event=json.loads(fragment)
+                except (ValueError,TypeError): continue
+                if isinstance(prior_event,dict) and 'event' in prior_event and 'consequence' in prior_event:
+                    previous_events.add((norm(prior_event['event']),norm(prior_event['consequence']),prior_event.get('date')))
             for event in data['events']:
+                event_key=(norm(event['event']),norm(event['consequence']),event['date'])
+                if event_key in previous_events:
+                    raise Error('Duplicate timeline milestone; keep NPC observations in knowledge instead')
+                previous_events.add(event_key)
                 if not set(event['participants'])<=set(meta['registry']): raise Error('Unknown event participant')
                 if event['date'] is not None:
                     try: datetime.fromisoformat(event['date'])
@@ -421,14 +490,25 @@ class Store:
                 if not set(entry['source_ids'])<=set(meta['registry']): raise Error('Unknown knowledge source')
                 if entry['source_kind']=='offscreen':
                     i=entry['event_index']
-                    if type(i) is not int or not 0<=i<len(data['events']) or cid not in data['events'][i]['participants']:
-                        raise Error('Offscreen knowledge needs a sourced chronology event involving its owner')
-                    if entry['evidence'] not in dump(data['events'][i]): raise Error('Offscreen evidence absent from event')
+                    if i is None:
+                        # Knowledge can be gained offscreen without inventing a
+                        # WORLD milestone. Source must preserve a specific trace.
+                        if len(entry['source'].strip()) < 25 or len(entry['evidence'].strip()) < 12 or entry['evidence'] not in entry['source']:
+                            raise Error('Offscreen-only knowledge requires a concrete source containing its exact evidence')
+                    else:
+                        if type(i) is not int or not 0<=i<len(data['events']) or cid not in data['events'][i]['participants']:
+                            raise Error('Offscreen chronology reference must involve the knowledge owner')
+                        if entry['evidence'] not in dump(data['events'][i]): raise Error('Offscreen evidence absent from event')
                 elif cid not in data['participants'] or entry['evidence'] not in data['narration']:
                     raise Error('Knowledge requires owner participation and a source quote from this scene')
                 name=f'knowledge/{cid}.md'
                 old=files.get(name,(path/name).read_bytes().decode('utf-8') if (path/name).exists() else document('Приобретённые знания',[]))
                 entries=parse_document(old)
+                key=(norm(entry['fact']),entry['status'],entry['source_kind'],
+                     tuple(entry['source_ids']),norm(entry['source']),norm(entry['evidence']))
+                if any((norm(row['fact']),row['status'],row['source_kind'],
+                        tuple(row['source_ids']),norm(row['source']),norm(row['evidence']))==key for row in entries):
+                    raise Error(f'Duplicate personal knowledge for {cid}; do not save the same acquisition twice')
                 if entry['supersedes'] is not None and not 0<=entry['supersedes']<len(entries): raise Error('Invalid superseded knowledge index')
                 entries.append({**entry,'turn':turn,'date':state['datetime']})
                 files[name]=document('Приобретённые знания',entries)
@@ -439,7 +519,9 @@ class Store:
             new.update(version=meta['version']+1,turn=turn,packets={},audit_due=([15,60] if turn%60==0 else [15]) if turn%15==0 else [])
             new['last_undo']={'files':{name:(path/name).read_bytes().decode('utf-8') if (path/name).exists() else None for name in files if name!='history.jsonl'},
                               'turn':meta['turn'],'audit_due':meta['audit_due'],'request_id':data['request_id']}
-            result={'session_id':sid,'turn':turn,'version':new['version'],'saved':True,'narration':data['narration'],'audit_due':new['audit_due']}
+            result={'session_id':sid,'turn':turn,'version':new['version'],'saved':True,'narration':data['narration'],
+                    'audit_due':new['audit_due'],'knowledge_written':len(data['knowledge']),
+                    'knowledge_owners':sorted(owners),'timeline_events_written':len(data['events'])}
             new['requests'][data['request_id']]={'hash':request_hash,'result':{k:v for k,v in result.items() if k!='narration'}}
             self.transaction(path,meta,files,new)
             return result
