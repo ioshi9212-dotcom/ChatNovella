@@ -331,6 +331,97 @@ class StoreTests(unittest.TestCase):
         restarted=Store(self.tmp.name,BASE)
         self.assertEqual(restarted.status(self.sid)['registry']['NPC_004'],'Кай')
 
+    def test_registered_npcs_have_empty_private_files_but_no_character_cards(self):
+        for cid in ('NPC_001','NPC_002','NPC_003'):
+            self.assertEqual(parse_document(self.read(f'knowledge/{cid}.md')),[])
+            self.assertFalse((self.store.path(self.sid)/'characters'/cid).exists())
+        _,text=self.packet(participants=['NPC_001'])
+        files=json.loads(text)['files']
+        self.assertIn('knowledge/NPC_001.md',files)
+        self.assertNotIn('knowledge/NPC_002.md',files)
+
+    def test_knowledge_review_is_required_and_must_match_written_owners(self):
+        from pydantic import ValidationError
+        missing=self.payload()
+        missing.pop('knowledge_review')
+        with self.assertRaises(ValidationError):
+            self.store.commit(self.sid,**missing)
+        with self.assertRaises(Error):
+            self.store.commit(self.sid,**self.payload(knowledge_review={}))
+        with self.assertRaises(Error):
+            self.store.commit(self.sid,**self.payload(knowledge_review={'NPC_001':'recorded'}))
+        self.assertEqual(self.store.status(self.sid)['turn'],0)
+
+    def test_scene_state_refuses_new_private_knowledge_in_multiple_fields(self):
+        cases=[
+            {'unfinished':['Эдриан знает о секрете Рины']},
+            {'pov':{'unfinished':['Дантэ не знает про письмо']}},
+            {'present':{'NPC_001':{'physical':'Рэй увидел скрытую татуировку'}}},
+            {'objects':['Ключ на столе; Рэй узнал код сейфа']},
+            {'remote':{'NPC_002':'Джун слышал разговор за стеной'}},
+        ]
+        for patch in cases:
+            with self.subTest(patch=patch),self.assertRaises(Error):
+                self.store.commit(self.sid,**self.payload(state_patch=patch))
+        self.assertEqual(self.store.status(self.sid)['turn'],0)
+
+    def test_personal_memory_writes_without_polluting_scene_or_world_timeline(self):
+        before=self.read('timeline.md')
+        quote='Рэй увидел письмо с кодом сейфа.'
+        item=dict(npc_id='NPC_001',fact='Код сейфа написан в письме.',status='knows',
+                  source_kind='witnessed',source_ids=['POV_001'],source='Сам прочитал письмо.',
+                  evidence=quote)
+        d=self.payload(narration=quote,knowledge=[item],state_patch={'unfinished':['открыть сейф']})
+        saved=self.store.commit(self.sid,**d)
+        self.assertEqual(saved['knowledge_written'],1)
+        self.assertEqual(saved['knowledge_owners'],['NPC_001'])
+        self.assertEqual(saved['timeline_events_written'],0)
+        self.assertEqual(self.read('timeline.md'),before)
+        self.assertEqual(parse_document(self.read('state.md'))['unfinished'],['открыть сейф'])
+        self.assertEqual(len(parse_document(self.read('knowledge/NPC_001.md'))),1)
+        with self.assertRaises(Error):
+            self.store.commit(self.sid,**self.payload(narration=quote,knowledge=[item]))
+        self.assertEqual(len(parse_document(self.read('knowledge/NPC_001.md'))),1)
+
+    def test_offscreen_observation_stays_private_without_timeline_event(self):
+        before=self.read('timeline.md')
+        item=dict(npc_id='NPC_003',fact='Пригородный поезд отменён.',status='knows',
+                  source_kind='offscreen',source_ids=[],
+                  source='В городе Мики лично прочитал на табло сообщение об отмене поезда.',
+                  evidence='Мики лично прочитал на табло')
+        result=self.store.commit(self.sid,**self.payload(participants=['NPC_001','NPC_003'],
+            knowledge=[item],no_event_reason='Личное наблюдение Мики не меняет глобальный ход истории.'))
+        self.assertEqual(result['knowledge_owners'],['NPC_003'])
+        self.assertEqual(self.read('timeline.md'),before)
+        self.assertIn('Пригородный поезд отменён.',self.read('knowledge/NPC_003.md'))
+        bad={**item,'source':'Просто догадался без доказательств.'}
+        with self.assertRaises(Error):
+            self.store.commit(self.sid,**self.payload(participants=['NPC_001','NPC_003'],knowledge=[bad]))
+
+    def test_timeline_requires_major_reason_and_rejects_exact_duplicate(self):
+        from pydantic import ValidationError
+        event=dict(date=None,participants=['POV_001','NPC_001'],event='Обнаружен ключ от тайного архива.',
+                   consequence='Открыт путь в сюжетно важное хранилище.')
+        invalid=self.payload(events=[event])
+        invalid['events'][0].pop('significance')
+        with self.assertRaises(ValidationError):
+            self.store.commit(self.sid,**invalid)
+        valid=self.payload(events=[event])
+        self.store.commit(self.sid,**valid)
+        with self.assertRaises(Error):
+            self.store.commit(self.sid,**self.payload(events=[event]))
+        self.assertEqual(self.read('timeline.md').count('Обнаружен ключ от тайного архива.'),1)
+
+    def test_existing_legacy_state_is_never_silently_migrated(self):
+        path=self.store.path(self.sid)/'state.md'
+        state_before=parse_document(path.read_text())
+        state_before['unfinished'].append('Эдриан знает, что Рина ушла')
+        path.write_text(document('Состояние',state_before))
+        self.store.commit(self.sid,**self.payload(state_patch={'pov':{'position':'у окна'}}))
+        self.assertIn('Эдриан знает, что Рина ушла',parse_document(path.read_text())['unfinished'])
+        self.store.commit(self.sid,**self.payload(state_patch={'unfinished':['назначить встречу']}))
+        self.assertEqual(parse_document(path.read_text())['unfinished'],['назначить встречу'])
+
     def test_16k_chunks_and_existing_12k_packet_survive_rollout(self):
         p,_=self.packet(read=False)
         self.assertEqual(p['chunk_size'],16000)
