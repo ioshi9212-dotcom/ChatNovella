@@ -11,6 +11,7 @@ CN_ сессии остаются в прежнем хранилище без а
 - [Архитектура и границы гарантий](docs/lite/ARCHITECTURE.md)
 - [Изученные реализации](docs/lite/RESEARCH.md)
 - [Результаты и незавершённая приёмка](docs/lite/REPORT.md)
+- [Экспериментальное разделение памяти, состояния и хронологии](docs/lite/MEMORY_BOUNDARIES_REVIEW.md) (в этой ветке, НЕ развёрнуто)
 
 ```bash
 python -m pip install -r requirements.txt
