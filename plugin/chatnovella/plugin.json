@@ -1,9 +1,11 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "chatnovella",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Интерактивные новеллы с постоянным состоянием и загрузкой модулей из Amvera.",
-  "author": {"name": "ioshi9212-dotcom"},
+  "author": {
+    "name": "ioshi9212-dotcom"
+  },
   "repository": "https://github.com/ioshi9212-dotcom/ChatNovella",
   "extensions": {
     "com.openai": {
