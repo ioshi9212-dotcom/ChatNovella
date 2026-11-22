@@ -425,6 +425,8 @@ class StoreTests(unittest.TestCase):
             self.store.commit(self.sid,**invalid)
         valid=self.payload(events=[event])
         self.store.commit(self.sid,**valid)
+        self.assertNotIn('Это важное и долговременное изменение истории.',self.read('timeline.md'))
+        self.assertIn('Это важное и долговременное изменение истории.',self.read('history.jsonl'))
         with self.assertRaises(Error):
             self.store.commit(self.sid,**self.payload(events=[event]))
         self.assertEqual(self.read('timeline.md').count('Обнаружен ключ от тайного архива.'),1)
