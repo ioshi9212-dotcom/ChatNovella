@@ -5,7 +5,7 @@ import tempfile
 import shutil
 import unittest
 from unittest.mock import patch
-from chatnovella_lite.store import Store, Error, digest, parse_document, dump, document
+from chatnovella_lite.store import Store, Error, digest, parse_document, dump, document, packet_payload, compact_knowledge, compact_timeline
 
 BASE=Path(__file__).resolve().parents[1]
 REG={'POV_001':'Рина','NPC_001':'Рэй','NPC_002':'Джун','NPC_003':'Мики'}
@@ -44,6 +44,13 @@ class StoreTests(unittest.TestCase):
            'participants':participants or ['NPC_001'],'state_patch':{'unfinished':[]},'relations':[],'knowledge':[],
            'events':[],'no_event_reason':'Только осмотр мебели без значимых событий.'}
         d.update(changes)
+        for event in d['events']:
+            event.setdefault('significance','major_consequence')
+            event.setdefault('significance_reason','Это важное и долговременное изменение истории.')
+        if 'knowledge_review' not in changes:
+            owners={entry['npc_id'] for entry in d['knowledge']}
+            d['knowledge_review']={cid:('recorded' if cid in owners else 'none')
+                                   for cid in {'POV_001'} | set(d['participants']) | owners}
         return d
     def audit(self):
         p,text=self.packet('',kind='audit')
@@ -130,7 +137,7 @@ class StoreTests(unittest.TestCase):
         quote='Рэй услышал по телефону: Джун ушёл.'
         d=self.payload(narration=quote,knowledge=[dict(npc_id='NPC_001',fact='Джун ушёл.',status='mistaken',source_kind='phone',source_ids=['NPC_002'],source='Джун сказал в звонке.',evidence=quote)])
         self.store.commit(self.sid,**d)
-        self.assertFalse((self.store.path(self.sid)/'knowledge/NPC_002.md').exists())
+        self.assertEqual(parse_document(self.read('knowledge/NPC_002.md')),[])
         old=self.read('knowledge/NPC_001.md')
         self.store.commit(self.sid,**self.payload(narration='Рэй увидел Джуна в дверях.',knowledge=[dict(npc_id='NPC_001',fact='Джун не ушёл.',status='refuted',source_kind='witnessed',source_ids=['NPC_002'],source='Лично увидел его.',evidence='Рэй увидел Джуна в дверях.',supersedes=0)]))
         entries=parse_document(self.read('knowledge/NPC_001.md'))
@@ -232,8 +239,9 @@ class StoreTests(unittest.TestCase):
             d=self.payload(narration=f'Полная сцена {i}. Рэй прочитал страницу архива.',participants=['NPC_001','NPC_003'] if i==1 else ['NPC_001'])
             if i==1:
                 d['participants']=['NPC_001']
-                d['events']=[dict(date=None,participants=['NPC_003'],event='Мики прочитал табло отмены поезда.',consequence='Узнал об отмене.')]
+                d['events']=[dict(date=None,participants=['NPC_003'],event='Мики прочитал табло отмены поезда.',consequence='Узнал об отмене.',significance='major_consequence',significance_reason='Отмена меняет запланированное путешествие героев.')]
                 d['knowledge']=[dict(npc_id='NPC_003',fact='Поезд отменён.',status='knows',source_kind='offscreen',source_ids=[],source='Прочитал табло.',evidence='Мики прочитал табло',event_index=0)]
+                d['knowledge_review']['NPC_003']='recorded'
             self.store.commit(self.sid,**d)
             if i%15==0:
                 with self.assertRaises(Error): self.packet()
@@ -242,12 +250,21 @@ class StoreTests(unittest.TestCase):
                 scenes=json.loads(data['files']['recent_scenes.json'])
                 self.assertEqual(len(scenes),15)
                 self.assertEqual(scenes[0]['turn'],i-14)
-                if i==30: self.assertNotIn('knowledge/NPC_003.md',data['files'])
+                if i==30: self.assertNotIn('knowledge/NPC_003.md',data['files'])  # owner not in this audit's 15-turn scope
                 if i==60:
                     self.assertEqual(set(p['participants']),set(REG)-{'POV_001'})
                     self.assertIn('Поезд отменён.',data['files']['knowledge/NPC_003.md'])
                 with self.assertRaises(Error): self.store.finish_audit(self.sid,p['version'],p['packet_id'],p['chunk_hashes'],{}, {})
-                self.audit()
+                result=self.audit()
+                self.assertIn('audit_compaction',result)
+                if i in (15,30,45):
+                    self.assertEqual(result['audit_compaction']['scope'],'last_15_participants_and_timeline')
+                if i==60:
+                    compact=result['audit_compaction']
+                    self.assertEqual(compact['scope'],'all_accumulated_timeline_and_all_character_knowledge')
+                    self.assertEqual(compact['active_history_turns'],60)
+                    self.assertEqual(compact['knowledge_files_checked'],len(REG))
+                    self.assertGreaterEqual(compact['saved_chars'],0)
         st=self.store.status(self.sid)
         self.assertEqual(st['turn'],60)
         self.assertEqual(st['audit_due'],[])
@@ -268,7 +285,7 @@ class StoreTests(unittest.TestCase):
         saved=self.store.commit(self.sid,**d)
         self.store.rollback(self.sid,saved['version'],d['request_id'],'Вернуться к прежнему варианту.')
         for name in names: self.assertEqual(self.read(name),old[name])
-        self.assertFalse((self.store.path(self.sid)/'knowledge/NPC_001.md').exists())
+        self.assertEqual(parse_document(self.read('knowledge/NPC_001.md')),[])
         self.assertEqual(len(self.store.history(self.store.path(self.sid))),2)
 
     def test_concurrent_requests_one_version_only_one_turn(self):
@@ -317,10 +334,226 @@ class StoreTests(unittest.TestCase):
         old=self.store.status(self.sid)
         updated=self.store.amend_canon(self.sid,old['version'],'Полная анкета. Рина пришла в библиотеку. Новый архивариус: Кай.','Разрешаю добавить Кая.','Новый постоянный персонаж.',{'NPC_004':'Кай'})
         self.assertEqual(updated['registry']['NPC_004'],'Кай')
+        self.assertEqual(parse_document(self.read('knowledge/NPC_004.md')),[])
         for cid,name in REG.items(): self.assertEqual(updated['registry'][cid],name)
         with self.assertRaises(Error): self.store.amend_canon(self.sid,updated['version'],'Другой канон.','Да','Переназначение',{'NPC_001':'Другой Рэй'})
         restarted=Store(self.tmp.name,BASE)
         self.assertEqual(restarted.status(self.sid)['registry']['NPC_004'],'Кай')
+
+    def test_registered_npcs_have_empty_private_files_but_no_character_cards(self):
+        for cid in ('POV_001','NPC_001','NPC_002','NPC_003'):
+            self.assertEqual(parse_document(self.read(f'knowledge/{cid}.md')),[])
+            self.assertFalse((self.store.path(self.sid)/'characters'/cid).exists())
+        _,text=self.packet(participants=['NPC_001'])
+        files=json.loads(text)['files']
+        self.assertIn('knowledge/NPC_001.md',files)
+        self.assertIn('knowledge/POV_001.md',files)
+        self.assertNotIn('knowledge/NPC_002.md',files)
+
+    def test_knowledge_review_is_required_and_must_match_written_owners(self):
+        from pydantic import ValidationError
+        missing=self.payload()
+        missing.pop('knowledge_review')
+        with self.assertRaises(ValidationError):
+            self.store.commit(self.sid,**missing)
+        with self.assertRaises(Error):
+            self.store.commit(self.sid,**self.payload(knowledge_review={}))
+        with self.assertRaises(Error):
+            self.store.commit(self.sid,**self.payload(knowledge_review={'POV_001':'none','NPC_001':'recorded'}))
+        self.assertEqual(self.store.status(self.sid)['turn'],0)
+
+    def test_scene_state_refuses_new_private_knowledge_in_multiple_fields(self):
+        setup_state=state()
+        setup_state['unfinished']=['Рэй знает о скрытом письме']
+        with self.assertRaises(Error):
+            self.store.create('Анкета','Анкета',REG,relations(),setup_state)
+        cases=[
+            {'unfinished':['Эдриан знает о секрете Рины']},
+            {'pov':{'unfinished':['Дантэ не знает про письмо']}},
+            {'present':{'NPC_001':{'physical':'Рэй увидел скрытую татуировку'}}},
+            {'objects':['Ключ на столе; Рэй узнал код сейфа']},
+            {'remote':{'NPC_002':'Джун слышал разговор за стеной'}},
+        ]
+        for patch in cases:
+            with self.subTest(patch=patch),self.assertRaises(Error):
+                self.store.commit(self.sid,**self.payload(state_patch=patch))
+        self.assertEqual(self.store.status(self.sid)['turn'],0)
+
+    def test_personal_memory_writes_without_polluting_scene_or_world_timeline(self):
+        before=self.read('timeline.md')
+        quote='Рэй увидел письмо с кодом сейфа.'
+        item=dict(npc_id='NPC_001',fact='Код сейфа написан в письме.',status='knows',
+                  source_kind='witnessed',source_ids=['POV_001'],source='Сам прочитал письмо.',
+                  evidence=quote)
+        d=self.payload(narration=quote,knowledge=[item],state_patch={'unfinished':['открыть сейф']})
+        saved=self.store.commit(self.sid,**d)
+        self.assertEqual(saved['knowledge_written'],1)
+        self.assertEqual(saved['knowledge_owners'],['NPC_001'])
+        self.assertEqual(saved['timeline_events_written'],0)
+        self.assertEqual(self.read('timeline.md'),before)
+        self.assertEqual(parse_document(self.read('state.md'))['unfinished'],['открыть сейф'])
+        self.assertEqual(len(parse_document(self.read('knowledge/NPC_001.md'))),1)
+        with self.assertRaises(Error):
+            self.store.commit(self.sid,**self.payload(narration=quote,knowledge=[item]))
+        self.assertEqual(len(parse_document(self.read('knowledge/NPC_001.md'))),1)
+
+    def test_pov_acquired_knowledge_has_own_file_and_is_not_scene_state(self):
+        quote='Рэй вслух назвал Рине пароль от сейфа.'
+        entry=dict(npc_id='POV_001',fact='Пароль от сейфа: тридцать два.',status='knows',
+                   source_kind='told',source_ids=['NPC_001'],source='Рэй сказал Рине вслух.',
+                   evidence=quote)
+        before=self.read('timeline.md')
+        saved=self.store.commit(self.sid,**self.payload(narration=quote,knowledge=[entry]))
+        self.assertEqual(saved['knowledge_owners'],['POV_001'])
+        self.assertIn('Пароль от сейфа',self.read('knowledge/POV_001.md'))
+        self.assertEqual(self.read('timeline.md'),before)
+        self.assertNotIn('пароль',self.read('state.md').casefold())
+
+    def test_offscreen_observation_stays_private_without_timeline_event(self):
+        before=self.read('timeline.md')
+        item=dict(npc_id='NPC_003',fact='Пригородный поезд отменён.',status='knows',
+                  source_kind='offscreen',source_ids=[],
+                  source='В городе Мики лично прочитал на табло сообщение об отмене поезда.',
+                  evidence='Мики лично прочитал на табло')
+        result=self.store.commit(self.sid,**self.payload(participants=['NPC_001','NPC_003'],
+            knowledge=[item],no_event_reason='Личное наблюдение Мики не меняет глобальный ход истории.'))
+        self.assertEqual(result['knowledge_owners'],['NPC_003'])
+        self.assertEqual(self.read('timeline.md'),before)
+        self.assertIn('Пригородный поезд отменён.',self.read('knowledge/NPC_003.md'))
+        bad={**item,'source':'Просто догадался без доказательств.'}
+        with self.assertRaises(Error):
+            self.store.commit(self.sid,**self.payload(participants=['NPC_001','NPC_003'],knowledge=[bad]))
+
+    def test_timeline_requires_major_reason_and_rejects_exact_duplicate(self):
+        from pydantic import ValidationError
+        event=dict(date=None,participants=['POV_001','NPC_001'],event='Обнаружен ключ от тайного архива.',
+                   consequence='Открыт путь в сюжетно важное хранилище.')
+        invalid=self.payload(events=[event])
+        invalid['events'][0].pop('significance')
+        with self.assertRaises(ValidationError):
+            self.store.commit(self.sid,**invalid)
+        valid=self.payload(events=[event])
+        self.store.commit(self.sid,**valid)
+        self.assertNotIn('Это важное и долговременное изменение истории.',self.read('timeline.md'))
+        self.assertIn('Это важное и долговременное изменение истории.',self.read('history.jsonl'))
+        with self.assertRaises(Error):
+            self.store.commit(self.sid,**self.payload(events=[event]))
+        self.assertEqual(self.read('timeline.md').count('Обнаружен ключ от тайного архива.'),1)
+
+    def test_existing_legacy_state_is_never_silently_migrated(self):
+        path=self.store.path(self.sid)/'state.md'
+        state_before=parse_document(path.read_text())
+        state_before['unfinished'].append('Эдриан знает, что Рина ушла')
+        path.write_text(document('Состояние',state_before))
+        self.store.commit(self.sid,**self.payload(state_patch={'pov':{'position':'у окна'}}))
+        self.assertIn('Эдриан знает, что Рина ушла',parse_document(path.read_text())['unfinished'])
+        self.store.commit(self.sid,**self.payload(state_patch={'unfinished':['назначить встречу']}))
+        self.assertEqual(parse_document(path.read_text())['unfinished'],['назначить встречу'])
+
+    def test_60_audit_compacts_exact_repeats_without_losing_sources_or_earlier_turns(self):
+        # One old milestone and own knowledge survive the full sequence.
+        quote='Рэй услышал пароль от Джуна.'
+        info=dict(npc_id='NPC_001',fact='Джун знает пароль.',status='knows',
+                  source_kind='told',source_ids=['NPC_002'],source='Лично сказал Джун.',
+                  evidence=quote)
+        event=dict(date=None,participants=['NPC_001','NPC_002'],
+                   event='Джун передал код доступа Рэю.',
+                   consequence='Рэй теперь может открыть скрытый проход.')
+        self.store.commit(self.sid,**self.payload(narration=quote,knowledge=[info],events=[event]))
+        for i in range(2,61):
+            self.store.commit(self.sid,**self.payload())
+            if i in (15,30,45): self.audit()
+        # A 60-turn audit must detect missing archived facts/events before
+        # accepting a compacted projection; failed attempts do not finish audit.
+        path=self.store.path(self.sid)
+        initial_knowledge=self.read('knowledge/NPC_001.md')
+        initial_timeline=self.read('timeline.md')
+        (path/'knowledge/NPC_001.md').write_text(document('Приобретённые знания',[]))
+        with self.assertRaisesRegex(Error,'reconciliation failed'):
+            self.audit()
+        self.assertEqual(self.store.status(self.sid)['audit_due'],[15,60])
+        (path/'knowledge/NPC_001.md').write_text(initial_knowledge)
+        (path/'timeline.md').write_text('# Хронология игровых событий\n')
+        with self.assertRaisesRegex(Error,'reconciliation failed'):
+            self.audit()
+        self.assertEqual(self.store.status(self.sid)['audit_due'],[15,60])
+        (path/'timeline.md').write_text(initial_timeline)
+        # Emulate two redundant *identical* entries inherited from a legacy
+        # writer. Keep the uniquely sourced original untouched.
+        original=parse_document(self.read('knowledge/NPC_001.md'))
+        self.assertEqual(len(original),1)
+        (path/'knowledge/NPC_001.md').write_text(document('Приобретённые знания',original+[original[0]]))
+        timeline=self.read('timeline.md')
+        import re
+        event_block=re.search(r'\n# Ход 1\n\n```json\n.*?\n```',timeline,re.S)
+        self.assertIsNotNone(event_block)
+        (path/'timeline.md').write_text(timeline+event_block.group(0))
+        p,raw=self.packet('',kind='audit')
+        files=json.loads(raw)['files']
+        self.assertIn('knowledge/NPC_001.md',files)
+        self.assertIn('Джун передал код доступа Рэю.',files['timeline.md'])
+        result=self.audit()
+        stats=result['audit_compaction']
+        self.assertEqual(stats['removed_identical_knowledge_records'],1)
+        self.assertEqual(stats['removed_identical_timeline_blocks'],1)
+        self.assertGreater(stats['saved_chars'],0)
+        after=parse_document(self.read('knowledge/NPC_001.md'))
+        self.assertEqual(after,original)
+        self.assertIn('Лично сказал Джун.',self.read('knowledge/NPC_001.md'))
+        self.assertEqual(self.read('timeline.md').count('Джун передал код доступа Рэю.'),1)
+        self.assertEqual(len(self.store.active_history(path)),60)
+        self.assertNotIn('audit_compaction',self.store.status(self.sid))
+
+    def test_120th_global_audit_reads_knowledge_from_turn_one(self):
+        quote='Рэй услышал код на первом ходу.'
+        item=dict(npc_id='NPC_001',fact='Первый код от сейфа.',status='knows',
+                  source_kind='told',source_ids=['NPC_002'],
+                  source='Джун вслух произнёс код.',evidence=quote)
+        first_event=dict(date=None,participants=['NPC_001'],
+                         event='Первый код был передан Рэю.',
+                         consequence='Рэй получил доступ к хранилищу.')
+        self.store.commit(self.sid,**self.payload(narration=quote,knowledge=[item],events=[first_event]))
+        for turn in range(2,121):
+            self.store.commit(self.sid,**self.payload())
+            if turn % 15 == 0 and turn < 120:
+                self.audit()
+        packet,text=self.packet('',kind='audit')
+        files=json.loads(text)['files']
+        self.assertEqual(len(json.loads(files['recent_scenes.json'])),15)
+        self.assertIn('Первый код от сейфа.',files['knowledge/NPC_001.md'])
+        self.assertIn('Первый код был передан Рэю.',files['timeline.md'])
+        result=self.store.finish_audit(self.sid,packet['version'],packet['packet_id'],packet['chunk_hashes'],
+            {k:'Полная анкета.' for k in ['continuity','relationships','knowledge','time_state','timeline',
+                                          'all_npc_knowledge','long_term']},{})
+        stats=result['audit_compaction']
+        self.assertEqual(stats['scope'],'all_accumulated_timeline_and_all_character_knowledge')
+        self.assertEqual(stats['active_history_turns'],120)
+        self.assertEqual(stats['verified_knowledge_acquisitions'],1)
+        self.assertEqual(stats['verified_world_events'],1)
+        self.assertEqual(len(self.store.active_history(self.store.path(self.sid))),120)
+
+    def test_compaction_preserves_refutations_and_raw_timeline_notes(self):
+        first=dict(npc_id='NPC_001',fact='Пароль старый.',status='mistaken',
+                   source='Личное сообщение.',source_ids=['NPC_002'],source_kind='message',
+                   evidence='Рэй прочитал старый пароль.',turn=1,date=None,
+                   event_index=None,supersedes=None)
+        second=dict(first,fact='Пароль изменён.',status='refuted',supersedes=1,turn=2)
+        old=document('Приобретённые знания',[first,first,second])
+        new,removed=compact_knowledge(old)
+        self.assertEqual(removed,0)  # keep supersedes indexes stable
+        self.assertEqual(parse_document(new),[first,first,second])
+        legacy='# Хронология игровых событий\n\nНепроверенная авторская заметка.\n'
+        compacted,removed=compact_timeline(legacy)
+        self.assertEqual((compacted,removed),(legacy,0))
+
+    def test_packet_reprepare_discards_old_context_to_avoid_metadata_bloat(self):
+        first,_=self.packet(read=False)
+        second,_=self.packet(read=False)
+        meta=json.loads((self.store.path(self.sid)/'system/meta.json').read_text())
+        self.assertEqual(set(meta['packets']),{second['packet_id']})
+        self.assertIn('payload_z',next(iter(meta['packets'].values())))
+        with self.assertRaises(Error):
+            self.store.read_chunk(self.sid,first['packet_id'],0)
 
     def test_16k_chunks_and_existing_12k_packet_survive_rollout(self):
         p,_=self.packet(read=False)
@@ -329,8 +562,12 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(len(first['text']),16000)
         meta_path=self.store.path(self.sid)/'system/meta.json'
         meta=json.loads(meta_path.read_text());packet=meta['packets'][p['packet_id']]
+        self.assertIn('payload_z',packet)
+        self.assertNotIn('payload',packet)
+        text=packet_payload(packet)
+        packet.pop('codec');packet.pop('payload_z')
+        packet['payload']=text  # emulate a packet issued before compression
         packet.pop('chunk_size')
-        text=packet['payload']
         legacy=[text[i:i+12000] for i in range(0,len(text),12000)]
         packet['hashes']=[digest(c) for c in legacy];packet['delivered']=[]
         meta_path.write_text(dump(meta))

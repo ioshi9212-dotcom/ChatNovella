@@ -33,7 +33,7 @@ class TransportTests(unittest.TestCase):
                 self.assertEqual(c.get(f'/sessions/{sid}/chunks/{p["packet_id"]}/{i}').status_code,200)
             d={'request_id':'actions-1','expected_version':p['version'],'packet_id':p['packet_id'],'chunk_hashes':p['chunk_hashes'],
                'reader_text':'Открой шкаф.','narration':'**Рэй** — Посмотрим.\n\nОн открыл шкаф и положил ключ на стол.',
-               'participants':['NPC_001'],'state_patch':{'objects':['открытый шкаф','ключ на столе']},'no_event_reason':'Только осмотр мебели.'}
+               'participants':['NPC_001'],'knowledge_review':{'POV_001':'none','NPC_001':'none'},'state_patch':{'objects':['открытый шкаф','ключ на столе']},'no_event_reason':'Только осмотр мебели.'}
             r=c.post(f'/sessions/{sid}/turns',json=d)
             self.assertEqual(r.status_code,200,r.text)
             self.assertTrue(r.json()['saved'])

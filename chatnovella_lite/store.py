@@ -5,6 +5,7 @@ materializing files. Interrupted commits roll forward under the lock; caught
 write failures restore the old image. No per-turn directories or database.
 """
 from __future__ import annotations
+import base64
 import contextlib
 from copy import deepcopy
 from datetime import datetime
@@ -16,12 +17,41 @@ from pathlib import Path
 import re
 import secrets
 import tempfile
+import zlib
 from typing import Any
 from .models import State, Relationships, RelationChange, Knowledge, Turn
 
 SID = re.compile(r'^LITE_[a-f0-9]{32}$')
 NPC = re.compile(r'^NPC_[0-9]{3,}$')
 CHUNK_SIZE = 16000
+# Reject only explicit epistemic assertions introduced by a NEW scene-state patch.
+# Already-stored legacy state is not silently changed; it needs a reviewed repair.
+_STATE_KNOWLEDGE = re.compile(
+    r'(?iu)\b(?:не\s+зна(?:ет|ют|л[аи]?|ли)|зна(?:ет|ют|л[аи]?|ли)|'
+    r'узна(?:л[аи]?|ли)|увидел(?:а|и)?|видел(?:а|и)?|'
+    r'услышал(?:а|и)?|слышал(?:а|и)?|'
+    r'помнит|помнят|помнил(?:а|и)?|известно\s+(?:ему|ей|им)|'
+    r'осведомл[её]н(?:а|ы)?)\b'
+)
+
+def norm(text):
+    return ' '.join(str(text).casefold().replace('ё', 'е').split())
+
+def check_state_patch_scope(patch):
+    """State is the current scene, not a second NPC memory store."""
+    if not isinstance(patch, dict):
+        raise Error('state_patch must be an object')
+    def scan(value, field):
+        if isinstance(value, str):
+            if _STATE_KNOWLEDGE.search(value):
+                raise Error(f'NPC knowledge found in state_patch.{field}; use knowledge for its owner ID')
+        elif isinstance(value, list):
+            for item in value: scan(item, field)
+        elif isinstance(value, dict):
+            for key, item in value.items(): scan(item, field + '.' + key)
+    # Inspect every supplied field, including apparently harmless item/position
+    # descriptions: the previous leak came through many different state slots.
+    scan(patch, 'state_patch')
 
 class Error(ValueError):
     pass
@@ -37,6 +67,72 @@ def document(title, obj):
 
 def parse_document(text):
     return json.loads(text.split('```json\n', 1)[1].rsplit('\n```', 1)[0])
+
+def compact_json(value):
+    """Lossless one-record-per-line JSON; no summarisation by guessing."""
+    if isinstance(value, list):
+        if not value: return '[]'
+        return '[\n' + ',\n'.join(
+            ' ' + json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+            for row in value) + '\n]'
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+
+def compact_knowledge(text):
+    """Preserve all distinct records and all sources, statuses and acquisition turns.
+
+    Only exact duplicate rows from the same acquisition may be folded. If any
+    row refers to another by supersedes index, leave indexes and rows intact.
+    """
+    original = parse_document(text)
+    if not isinstance(original, list) or not all(isinstance(x, dict) for x in original):
+        raise Error('Invalid personal-memory document')
+    may_dedupe = not any(row.get('supersedes') is not None for row in original)
+    entries, seen, duplicates = [], set(), 0
+    for row in original:
+        key = json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+        if may_dedupe and key in seen:
+            duplicates += 1
+        else:
+            entries.append(row)
+            seen.add(key)
+    result = '# Приобретённые знания\n\n```json\n' + compact_json(entries) + '\n```\n'
+    if parse_document(result) != entries:
+        raise Error('Memory compaction invariant failed')
+    return result, duplicates
+
+_TIMELINE_BLOCK = re.compile(r'(\n+# Ход (\d+)\n\n```json\n)(.*?)(\n```)', re.S)
+
+def compact_timeline(text):
+    """Compact every stored world milestone; retain all unmatched user notes."""
+    seen, removed = set(), 0
+    def convert(match):
+        nonlocal removed
+        try: row = json.loads(match.group(3))
+        except ValueError: return match.group(0)
+        if not isinstance(row, dict) or row.get('turn') != int(match.group(2)):
+            return match.group(0)
+        key = json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+        if key in seen:
+            removed += 1
+            return ''
+        seen.add(key)
+        return match.group(1) + key + match.group(4)
+    return _TIMELINE_BLOCK.sub(convert, text), removed
+
+def packet_payload(packet):
+    """Old uncompressed packets remain readable across a software rollout."""
+    if 'payload' in packet:
+        return packet['payload']
+    if packet.get('codec') != 'zlib-base64':
+        raise Error('Unsupported packet codec')
+    try:
+        return zlib.decompress(base64.b64decode(packet['payload_z'])).decode('utf-8')
+    except (ValueError, zlib.error, UnicodeError, KeyError) as exc:
+        raise Error('Damaged compressed context packet') from exc
+
+def pack_payload(text):
+    return {'codec': 'zlib-base64',
+            'payload_z': base64.b64encode(zlib.compress(text.encode('utf-8'), level=3)).decode('ascii')}
 
 def merge(old, patch):
     result = deepcopy(old)
@@ -118,7 +214,7 @@ class Store:
 
     @staticmethod
     def safe(name):
-        if name not in {'original.md','novel.md','relationships.md','state.md','timeline.md','history.jsonl'} and not re.fullmatch(r'knowledge/NPC_[0-9]{3,}\.md',name):
+        if name not in {'original.md','novel.md','relationships.md','state.md','timeline.md','history.jsonl'} and not re.fullmatch(r'knowledge/(?:POV_001|NPC_[0-9]{3,})\.md',name):
             raise Error('Invalid file path')
 
     def transaction(self, path, meta, files, new):
@@ -162,6 +258,7 @@ class Store:
         if not all((key=='POV_001' or NPC.fullmatch(key)) and isinstance(name,str) and name.strip() for key,name in registry.items()):
             raise Error('Invalid permanent character registry')
         state = State.model_validate(state).model_dump()
+        check_state_patch_scope(state)
         if state['turn'] != 0:
             raise Error('Setup turn must be zero')
         self.validate_state(state,registry)
@@ -174,6 +271,11 @@ class Store:
             files={'original.md':original_text,'novel.md':self.canon(novel_text,registry),
                    'relationships.md':document('Отношения',rel),'state.md':document('Состояние',state),
                    'timeline.md':'# Хронология игровых событий\n','history.jsonl':''}
+            # Per-ID acquired-memory logs exist for POV and every NPC from day one.
+            # Canonical biography remains only in novel.md.
+            for cid in registry:
+                if cid=='POV_001' or NPC.fullmatch(cid):
+                    files[f'knowledge/{cid}.md']=document('Приобретённые знания',[])
             self.materialize(tmp,files)
             meta={'session_id':sid,'version':1,'turn':0,'approved':False,'canon_hash':digest(files['novel.md']),
                   'original_hash':digest(original_text),'registry':registry,'audit_due':[],
@@ -212,6 +314,7 @@ class Store:
             if meta['approved']: raise Error('Setup is locked; use an explicitly approved canon amendment')
             if not novel_text.strip(): raise Error('Full proposed canon required')
             state=State.model_validate(state).model_dump()
+            check_state_patch_scope(state)
             if state['turn']!=0: raise Error('Setup turn must be zero')
             self.validate_state(state,meta['registry'])
             rel=Relationships.model_validate(relationships).model_dump()
@@ -236,7 +339,10 @@ class Store:
             new=deepcopy(meta)
             new.update(version=meta['version']+1,canon_hash=digest(text),packets={},registry=registry)
             new['operations'].append({'kind':'canon_amendment','old_registry':meta['registry'],'old_text':(path/'novel.md').read_bytes().decode('utf-8'),'new_hash':new['canon_hash'],'reason':reason,'confirmation':reader_confirmation})
-            self.transaction(path,meta,{'novel.md':text},new)
+            files={'novel.md':text}
+            for cid in (registry_additions or {}):
+                files[f'knowledge/{cid}.md']=document('Приобретённые знания',[])
+            self.transaction(path,meta,files,new)
             return self.status_of(new)
 
     @staticmethod
@@ -323,7 +429,7 @@ class Store:
                 participants=sorted(set(cid for row in scope for cid in row['participants']))
                 affected=set(participants)
                 for row in scope:
-                    affected.update(entry['npc_id'] for entry in row.get('knowledge',[]))
+                    affected.update(entry['npc_id'] for entry in row.get('knowledge',[]) if entry['npc_id']!='POV_001')
                     affected.update(cid for event in row.get('events',[]) for cid in event['participants'] if cid!='POV_001')
                     affected.update(change['source'] for change in row.get('relations',[]))
                     affected.update(change['target'] for change in row.get('relations',[]) if change['target']!='POV_001')
@@ -334,6 +440,10 @@ class Store:
             pieces.update({name:(path/name).read_bytes().decode('utf-8') for name in ('novel.md','relationships.md','state.md','timeline.md')})
             if kind=='canon': pieces['original.md']=(path/'original.md').read_bytes().decode('utf-8')
             pieces['recent_scenes.json']=dump([{'turn':r['turn'],'reader_text':r['reader_text'],'narration':r['narration']} for r in scope])
+            # The point-of-view character also has private, acquired knowledge.
+            pov_file=path/'knowledge/POV_001.md'
+            pieces['knowledge/POV_001.md']=(pov_file.read_bytes().decode('utf-8') if pov_file.exists()
+                                            else document('Приобретённые знания',[]))
             for cid in participants:
                 name=f'knowledge/{cid}.md'
                 if (path/name).exists(): pieces[name]=(path/name).read_bytes().decode('utf-8')
@@ -341,10 +451,11 @@ class Store:
             chunks=[payload[i:i+CHUNK_SIZE] for i in range(0,len(payload),CHUNK_SIZE)]
             packet_id=secrets.token_hex(16)
             packet={'version':meta['version'],'kind':kind,'reader_text':reader_text,'participants':participants,
-                    'payload':payload,'chunk_size':CHUNK_SIZE,'hashes':[digest(c) for c in chunks],'delivered':[],'files':{k:digest(v) for k,v in pieces.items()}}
-            # Keep only latest packets; bounded metadata, never delete scene history.
-            meta['packets']={k:v for k,v in list(meta['packets'].items())[-3:] if v['version']==meta['version']}
-            meta['packets'][packet_id]=packet
+                    **pack_payload(payload),'chunk_size':CHUNK_SIZE,'hashes':[digest(c) for c in chunks],
+                    'delivered':[],'files':{k:digest(v) for k,v in pieces.items()}}
+            # A single fresh context avoids copying large payloads 3 times into
+            # metadata. Each chunk receipt fsyncs only the compressed packet.
+            meta['packets']={packet_id:packet}
             atomic(path/'system/meta.json',dump(meta))
             return {'packet_id':packet_id,'version':meta['version'],'chunk_count':len(chunks),'sha256':digest(payload),
                     'chunk_size':CHUNK_SIZE,'chunk_hashes':packet['hashes'],'file_hashes':packet['files'],'characters':len(payload),'participants':participants,'audit_due':meta['audit_due']}
@@ -356,7 +467,7 @@ class Store:
             if type(index) is not int or not 0<=index<len(packet['hashes']): raise Error('Invalid chunk index')
             # Already-issued packets retain their original boundaries after rollout.
             size=packet.get('chunk_size',12000)
-            text=packet['payload'][index*size:(index+1)*size]
+            text=packet_payload(packet)[index*size:(index+1)*size]
             packet['delivered']=sorted(set(packet['delivered'])|{index})
             atomic(path/'system/meta.json',dump(meta))
             return {'index':index,'text':text,'sha256':digest(text),'version':meta['version']}
@@ -386,6 +497,19 @@ class Store:
             if packet['reader_text']!=data['reader_text']: raise Error('Reader input differs from prepared input')
             if not set(data['participants'])<=set(packet['participants']): raise Error('Load entering NPC knowledge before writing the scene')
             if len(data['participants'])!=len(set(data['participants'])): raise Error('Duplicate participant')
+            # Catch knowledge smuggled into scene state, but never rewrite legacy
+            # state automatically: historical repairs must be author-reviewed.
+            check_state_patch_scope(data['state_patch'])
+            owners={entry['npc_id'] for entry in data['knowledge']}
+            reviewed={'POV_001'} | set(data['participants']) | owners
+            if set(data['knowledge_review']) != reviewed:
+                raise Error('knowledge_review must cover POV_001, every participating NPC and every offscreen knowledge owner')
+            for cid in reviewed:
+                if cid not in meta['registry']:
+                    raise Error('Unknown knowledge-review owner')
+                has_entries=cid in owners
+                if (data['knowledge_review'][cid]=='recorded') != has_entries:
+                    raise Error(f'Knowledge review for {cid} disagrees with personal-memory entries')
             before_state=parse_document((path/'state.md').read_bytes().decode('utf-8'))
             state=merge(before_state,data['state_patch'])
             # Membership dictionaries are full replacements when supplied;
@@ -408,27 +532,54 @@ class Store:
             turn=state['turn']
             if not data['events'] and not data['no_event_reason'].strip(): raise Error('Provide events or explain why no significant event occurred')
             timeline=(path/'timeline.md').read_bytes().decode('utf-8')
+            # Reject exact repeat milestones instead of endlessly appending them.
+            previous_events=set()
+            for fragment in re.findall(r'```json\n(.*?)\n```',timeline,re.S):
+                try: prior_event=json.loads(fragment)
+                except (ValueError,TypeError): continue
+                if isinstance(prior_event,dict) and 'event' in prior_event and 'consequence' in prior_event:
+                    previous_events.add((norm(prior_event['event']),norm(prior_event['consequence']),prior_event.get('date')))
             for event in data['events']:
+                event_key=(norm(event['event']),norm(event['consequence']),event['date'])
+                if event_key in previous_events:
+                    raise Error('Duplicate timeline milestone; keep NPC observations in knowledge instead')
+                previous_events.add(event_key)
                 if not set(event['participants'])<=set(meta['registry']): raise Error('Unknown event participant')
                 if event['date'] is not None:
                     try: datetime.fromisoformat(event['date'])
                     except (TypeError,ValueError): raise Error('Event date must be ISO or null')
-                timeline+='\n'+document(f'Ход {turn}',{**event,'turn':turn})
+                # Timeline is the compact world index. The detailed justification
+                # stays in the full immutable turn record in history.jsonl.
+                timeline+='\n'+document(f'Ход {turn}',{
+                    'turn':turn,'date':event['date'],'participants':event['participants'],
+                    'event':event['event'],'consequence':event['consequence'],
+                    'significance':event['significance']})
             files['timeline.md']=timeline
             for entry in data['knowledge']:
                 cid=entry['npc_id']
-                if cid not in packet['participants']: raise Error('Load owner knowledge before adding knowledge')
+                if cid!='POV_001' and cid not in packet['participants']: raise Error('Load owner knowledge before adding knowledge')
                 if not set(entry['source_ids'])<=set(meta['registry']): raise Error('Unknown knowledge source')
                 if entry['source_kind']=='offscreen':
                     i=entry['event_index']
-                    if type(i) is not int or not 0<=i<len(data['events']) or cid not in data['events'][i]['participants']:
-                        raise Error('Offscreen knowledge needs a sourced chronology event involving its owner')
-                    if entry['evidence'] not in dump(data['events'][i]): raise Error('Offscreen evidence absent from event')
-                elif cid not in data['participants'] or entry['evidence'] not in data['narration']:
+                    if i is None:
+                        # Knowledge can be gained offscreen without inventing a
+                        # WORLD milestone. Source must preserve a specific trace.
+                        if len(entry['source'].strip()) < 25 or len(entry['evidence'].strip()) < 12 or entry['evidence'] not in entry['source']:
+                            raise Error('Offscreen-only knowledge requires a concrete source containing its exact evidence')
+                    else:
+                        if type(i) is not int or not 0<=i<len(data['events']) or cid not in data['events'][i]['participants']:
+                            raise Error('Offscreen chronology reference must involve the knowledge owner')
+                        if entry['evidence'] not in dump(data['events'][i]): raise Error('Offscreen evidence absent from event')
+                elif (cid!='POV_001' and cid not in data['participants']) or entry['evidence'] not in data['narration']:
                     raise Error('Knowledge requires owner participation and a source quote from this scene')
                 name=f'knowledge/{cid}.md'
                 old=files.get(name,(path/name).read_bytes().decode('utf-8') if (path/name).exists() else document('Приобретённые знания',[]))
                 entries=parse_document(old)
+                key=(norm(entry['fact']),entry['status'],entry['source_kind'],
+                     tuple(entry['source_ids']),norm(entry['source']),norm(entry['evidence']))
+                if any((norm(row['fact']),row['status'],row['source_kind'],
+                        tuple(row['source_ids']),norm(row['source']),norm(row['evidence']))==key for row in entries):
+                    raise Error(f'Duplicate personal knowledge for {cid}; do not save the same acquisition twice')
                 if entry['supersedes'] is not None and not 0<=entry['supersedes']<len(entries): raise Error('Invalid superseded knowledge index')
                 entries.append({**entry,'turn':turn,'date':state['datetime']})
                 files[name]=document('Приобретённые знания',entries)
@@ -439,7 +590,9 @@ class Store:
             new.update(version=meta['version']+1,turn=turn,packets={},audit_due=([15,60] if turn%60==0 else [15]) if turn%15==0 else [])
             new['last_undo']={'files':{name:(path/name).read_bytes().decode('utf-8') if (path/name).exists() else None for name in files if name!='history.jsonl'},
                               'turn':meta['turn'],'audit_due':meta['audit_due'],'request_id':data['request_id']}
-            result={'session_id':sid,'turn':turn,'version':new['version'],'saved':True,'narration':data['narration'],'audit_due':new['audit_due']}
+            result={'session_id':sid,'turn':turn,'version':new['version'],'saved':True,'narration':data['narration'],
+                    'audit_due':new['audit_due'],'knowledge_written':len(data['knowledge']),
+                    'knowledge_owners':sorted(owners),'timeline_events_written':len(data['events'])}
             new['requests'][data['request_id']]={'hash':request_hash,'result':{k:v for k,v in result.items() if k!='narration'}}
             self.transaction(path,meta,files,new)
             return result
@@ -466,14 +619,14 @@ class Store:
             if 60 in meta['audit_due']: required|={'all_npc_knowledge','long_term'}
             if set(report)!=required or not all(isinstance(v,str) and v.strip() for v in report.values()): raise Error('Audit must cover each required domain with source evidence')
             # Evidence is explicit exact source quotation, not a ceremonial checkbox.
-            source=json.loads(packet['payload'])['files']
+            source=json.loads(packet_payload(packet))['files']
             joined='\n'.join(source.values())
             joined+='\n'+'\n'.join(row['narration'] for row in json.loads(source['recent_scenes.json']))
             for text in report.values():
                 if text not in joined: raise Error('Each audit domain requires a verbatim source excerpt')
             files={}
             for name,change in corrections.items():
-                if name not in ('state.md','relationships.md','timeline.md') and not re.fullmatch(r'knowledge/NPC_[0-9]{3,}\.md',name): raise Error('Audit cannot change canon or history')
+                if name not in ('state.md','relationships.md','timeline.md') and not re.fullmatch(r'knowledge/(?:POV_001|NPC_[0-9]{3,})\.md',name): raise Error('Audit cannot change canon or history')
                 if not isinstance(change,dict) or set(change)!={'before','after','reason'} or not change['reason'].strip(): raise Error('Audited correction needs exact before/after and reason')
                 current=(path/name).read_bytes().decode('utf-8') if (path/name).exists() else ''
                 if change['before']!=current: raise Error('Correction before-image mismatch')
@@ -484,7 +637,7 @@ class Store:
                 elif name=='relationships.md': self.validate_relations(Relationships.model_validate(parse_document(change['after'])).model_dump(),meta['registry'])
                 elif name.startswith('knowledge/'):
                     cid=Path(name).stem
-                    if cid not in packet['participants']: raise Error('Knowledge owner outside audit scope')
+                    if cid!='POV_001' and cid not in packet['participants']: raise Error('Knowledge owner outside audit scope')
                     old=parse_document(current) if current else []
                     after=parse_document(change['after'])
                     if after[:len(old)]!=old: raise Error('Append a sourced correction; preserve knowledge history')
@@ -498,11 +651,106 @@ class Store:
                             raise Error('Correction must reference an existing earlier knowledge entry')
                 elif not change['after'].startswith(current): raise Error('Append timeline corrections; preserve historical entries')
                 files[name]=change['after']
+            # Every 15 turns: compact the full world timeline and the acquired
+            # memories of NPCs in the last 15 scenes (plus POV).
+            # Every 60: additionally inspect ALL ID memories and reconcile
+            # their full accumulated records with the complete active archive.
+            # No semantic paraphrasing; keep every distinct fact and source.
+            global_audit=60 in meta['audit_due']
+            target_ids=(set(meta['registry']) if global_audit else
+                        {'POV_001'} | set(packet['participants']))
+            compaction=None
+            if meta['audit_due']:
+                original_chars=0
+                updated_chars=0
+                duplicate_knowledge=0
+                knowledge_files_checked=0
+                for cid in sorted(target_ids):
+                    name=f'knowledge/{cid}.md'
+                    current=files.get(name)
+                    if current is None:
+                        current=(path/name).read_bytes().decode('utf-8') if (path/name).exists() else document('Приобретённые знания',[])
+                    compacted,duplicates=compact_knowledge(current)
+                    original_chars+=len(current)
+                    updated_chars+=len(compacted)
+                    duplicate_knowledge+=duplicates
+                    knowledge_files_checked+=1
+                    if compacted!=current or not (path/name).exists():
+                        files[name]=compacted
+                name='timeline.md'
+                current=files.get(name,(path/name).read_bytes().decode('utf-8'))
+                compacted,duplicate_events=compact_timeline(current)
+                original_chars+=len(current)
+                updated_chars+=len(compacted)
+                if compacted!=current:
+                    files[name]=compacted
+                coverage={}
+                if global_audit:
+                    active_rows=self.active_history(path)
+                    contents={name:(files.get(name) if name in files else
+                            (path/name).read_bytes().decode('utf-8'))
+                              for name in ['timeline.md',*(f'knowledge/{cid}.md' for cid in meta['registry'])]}
+                    coverage=self.audit_archive_coverage(active_rows,contents,meta['registry'])
+                    coverage['active_history_turns']=len(active_rows)
+                compaction={'scope':('all_accumulated_timeline_and_all_character_knowledge'
+                                     if global_audit else 'last_15_participants_and_timeline'),
+                            **coverage,'knowledge_files_checked':knowledge_files_checked,
+                            'removed_identical_knowledge_records':duplicate_knowledge,
+                            'removed_identical_timeline_blocks':duplicate_events,
+                            'before_chars':original_chars,'after_chars':updated_chars,
+                            'saved_chars':original_chars-updated_chars}
             new=deepcopy(meta)
             new.update(version=meta['version']+1,packets={},audit_due=[])
-            new['operations'].append({'kind':'audit','turn':meta['turn'],'scope':meta['audit_due'],'report':report,'corrections':corrections})
+            new['operations'].append({'kind':'audit','turn':meta['turn'],'scope':meta['audit_due'],
+                                      'report':report,'corrections':corrections,'compaction':compaction})
             self.transaction(path,meta,files,new)
-            return self.status_of(new)
+            result=self.status_of(new)
+            if compaction is not None: result['audit_compaction']=compaction
+            return result
+
+    @staticmethod
+    def audit_archive_coverage(rows, files, registry):
+        """Cross-check all committed personal knowledge and world events.
+
+        Archive turns remain the immutable evidence source. This checks loss,
+        NOT whether a writer inferred a character's senses correctly.
+        """
+        knowledge_keys=set()
+        for cid in registry:
+            name=f'knowledge/{cid}.md'
+            text=files.get(name)
+            if text is None: continue
+            for entry in parse_document(text):
+                knowledge_keys.add((cid,entry.get('turn'),entry.get('fact'),entry.get('status'),
+                                    entry.get('source_kind'),tuple(entry.get('source_ids',[])),
+                                    entry.get('source'),entry.get('evidence')))
+        timeline_keys=set()
+        timeline=files['timeline.md']
+        for body in re.findall(r'```json\n(.*?)\n```',timeline,re.S):
+            try: data=json.loads(body)
+            except ValueError: continue
+            for entry in data if isinstance(data,list) else [data]:
+                if isinstance(entry,dict) and 'event' in entry:
+                    timeline_keys.add((entry.get('turn'),entry.get('date'),
+                                       tuple(entry.get('participants',[])),
+                                       entry.get('event'),entry.get('consequence')))
+        expected_knowledge=set()
+        expected_events=set()
+        for row in rows:
+            for entry in row.get('knowledge',[]):
+                expected_knowledge.add((entry['npc_id'],row['turn'],entry['fact'],entry['status'],
+                                        entry['source_kind'],tuple(entry['source_ids']),
+                                        entry['source'],entry['evidence']))
+            for event in row.get('events',[]):
+                expected_events.add((row['turn'],event['date'],tuple(event['participants']),
+                                     event['event'],event['consequence']))
+        missing_k=expected_knowledge-knowledge_keys
+        missing_e=expected_events-timeline_keys
+        if missing_k or missing_e:
+            raise Error(f'60-turn archive reconciliation failed: {len(missing_k)} missing knowledge acquisitions, '
+                        f'{len(missing_e)} missing world events; repair from primary turn evidence before finalising audit')
+        return {'verified_knowledge_acquisitions':len(expected_knowledge),
+                'verified_world_events':len(expected_events)}
 
     def read_history(self,sid,start=1,end=None,query=''):
         with self.locked(sid) as (path,meta):
@@ -511,7 +759,8 @@ class Store:
             # Reuse lossless packets for arbitrarily large archive queries.
             pid=secrets.token_hex(16)
             chunks=[text[i:i+CHUNK_SIZE] for i in range(0,len(text),CHUNK_SIZE)]
-            meta['packets'][pid]={'kind':'history','version':meta['version'],'payload':text,'chunk_size':CHUNK_SIZE,'hashes':[digest(c) for c in chunks],'delivered':[]}
+            meta['packets'][pid]={'kind':'history','version':meta['version'],**pack_payload(text),
+                                  'chunk_size':CHUNK_SIZE,'hashes':[digest(c) for c in chunks],'delivered':[]}
             while len(meta['packets'])>4: del meta['packets'][next(iter(meta['packets']))]
             atomic(path/'system/meta.json',dump(meta))
             return {'packet_id':pid,'chunk_count':len(chunks),'chunk_size':CHUNK_SIZE,'chunk_hashes':[digest(c) for c in chunks],'sha256':digest(text),'turns':len(rows)}
