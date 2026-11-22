@@ -146,7 +146,7 @@ class Store:
 
     @staticmethod
     def safe(name):
-        if name not in {'original.md','novel.md','relationships.md','state.md','timeline.md','history.jsonl'} and not re.fullmatch(r'knowledge/NPC_[0-9]{3,}\.md',name):
+        if name not in {'original.md','novel.md','relationships.md','state.md','timeline.md','history.jsonl'} and not re.fullmatch(r'knowledge/(?:POV_001|NPC_[0-9]{3,})\.md',name):
             raise Error('Invalid file path')
 
     def transaction(self, path, meta, files, new):
@@ -203,10 +203,10 @@ class Store:
             files={'original.md':original_text,'novel.md':self.canon(novel_text,registry),
                    'relationships.md':document('Отношения',rel),'state.md':document('Состояние',state),
                    'timeline.md':'# Хронология игровых событий\n','history.jsonl':''}
-            # Personal acquisition logs exist for every permanent NPC from day one.
-            # The canonical biography remains only in novel.md.
+            # Per-ID acquired-memory logs exist for POV and every NPC from day one.
+            # Canonical biography remains only in novel.md.
             for cid in registry:
-                if NPC.fullmatch(cid):
+                if cid=='POV_001' or NPC.fullmatch(cid):
                     files[f'knowledge/{cid}.md']=document('Приобретённые знания',[])
             self.materialize(tmp,files)
             meta={'session_id':sid,'version':1,'turn':0,'approved':False,'canon_hash':digest(files['novel.md']),
@@ -372,6 +372,10 @@ class Store:
             pieces.update({name:(path/name).read_bytes().decode('utf-8') for name in ('novel.md','relationships.md','state.md','timeline.md')})
             if kind=='canon': pieces['original.md']=(path/'original.md').read_bytes().decode('utf-8')
             pieces['recent_scenes.json']=dump([{'turn':r['turn'],'reader_text':r['reader_text'],'narration':r['narration']} for r in scope])
+            # The point-of-view character also has private, acquired knowledge.
+            pov_file=path/'knowledge/POV_001.md'
+            pieces['knowledge/POV_001.md']=(pov_file.read_bytes().decode('utf-8') if pov_file.exists()
+                                            else document('Приобретённые знания',[]))
             for cid in participants:
                 name=f'knowledge/{cid}.md'
                 if (path/name).exists(): pieces[name]=(path/name).read_bytes().decode('utf-8')
@@ -428,11 +432,11 @@ class Store:
             # state automatically: historical repairs must be author-reviewed.
             check_state_patch_scope(data['state_patch'])
             owners={entry['npc_id'] for entry in data['knowledge']}
-            reviewed=set(data['participants']) | owners
+            reviewed={'POV_001'} | set(data['participants']) | owners
             if set(data['knowledge_review']) != reviewed:
                 raise Error('knowledge_review must cover every participating NPC and offscreen knowledge owner')
             for cid in reviewed:
-                if cid not in meta['registry'] or cid=='POV_001':
+                if cid not in meta['registry']:
                     raise Error('Unknown knowledge-review owner')
                 has_entries=cid in owners
                 if (data['knowledge_review'][cid]=='recorded') != has_entries:
@@ -479,7 +483,7 @@ class Store:
             files['timeline.md']=timeline
             for entry in data['knowledge']:
                 cid=entry['npc_id']
-                if cid not in packet['participants']: raise Error('Load owner knowledge before adding knowledge')
+                if cid!='POV_001' and cid not in packet['participants']: raise Error('Load owner knowledge before adding knowledge')
                 if not set(entry['source_ids'])<=set(meta['registry']): raise Error('Unknown knowledge source')
                 if entry['source_kind']=='offscreen':
                     i=entry['event_index']
@@ -492,7 +496,7 @@ class Store:
                         if type(i) is not int or not 0<=i<len(data['events']) or cid not in data['events'][i]['participants']:
                             raise Error('Offscreen chronology reference must involve the knowledge owner')
                         if entry['evidence'] not in dump(data['events'][i]): raise Error('Offscreen evidence absent from event')
-                elif cid not in data['participants'] or entry['evidence'] not in data['narration']:
+                elif (cid!='POV_001' and cid not in data['participants']) or entry['evidence'] not in data['narration']:
                     raise Error('Knowledge requires owner participation and a source quote from this scene')
                 name=f'knowledge/{cid}.md'
                 old=files.get(name,(path/name).read_bytes().decode('utf-8') if (path/name).exists() else document('Приобретённые знания',[]))
@@ -548,7 +552,7 @@ class Store:
                 if text not in joined: raise Error('Each audit domain requires a verbatim source excerpt')
             files={}
             for name,change in corrections.items():
-                if name not in ('state.md','relationships.md','timeline.md') and not re.fullmatch(r'knowledge/NPC_[0-9]{3,}\.md',name): raise Error('Audit cannot change canon or history')
+                if name not in ('state.md','relationships.md','timeline.md') and not re.fullmatch(r'knowledge/(?:POV_001|NPC_[0-9]{3,})\.md',name): raise Error('Audit cannot change canon or history')
                 if not isinstance(change,dict) or set(change)!={'before','after','reason'} or not change['reason'].strip(): raise Error('Audited correction needs exact before/after and reason')
                 current=(path/name).read_bytes().decode('utf-8') if (path/name).exists() else ''
                 if change['before']!=current: raise Error('Correction before-image mismatch')
@@ -559,7 +563,7 @@ class Store:
                 elif name=='relationships.md': self.validate_relations(Relationships.model_validate(parse_document(change['after'])).model_dump(),meta['registry'])
                 elif name.startswith('knowledge/'):
                     cid=Path(name).stem
-                    if cid not in packet['participants']: raise Error('Knowledge owner outside audit scope')
+                    if cid!='POV_001' and cid not in packet['participants']: raise Error('Knowledge owner outside audit scope')
                     old=parse_document(current) if current else []
                     after=parse_document(change['after'])
                     if after[:len(old)]!=old: raise Error('Append a sourced correction; preserve knowledge history')
