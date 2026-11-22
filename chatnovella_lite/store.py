@@ -47,18 +47,9 @@ def check_state_patch_scope(patch):
             for item in value: scan(item, field)
         elif isinstance(value, dict):
             for key, item in value.items(): scan(item, field + '.' + key)
-    for key in ('unfinished', 'objects', 'remote'):
-        if key in patch: scan(patch[key], key)
-    for key in ('pov', 'present'):
-        if key in patch and isinstance(patch[key], dict):
-            if key == 'pov':
-                actors = {'pov': patch[key]}
-            else:
-                actors = patch[key]
-            for cid, actor in actors.items():
-                if isinstance(actor, dict):
-                    for field in ('unfinished', 'physical'):
-                        if field in actor: scan(actor[field], key + '.' + cid + '.' + field)
+    # Inspect every supplied field, including apparently harmless item/position
+    # descriptions: the previous leak came through many different state slots.
+    scan(patch, 'state_patch')
 
 class Error(ValueError):
     pass
