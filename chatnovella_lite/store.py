@@ -651,17 +651,21 @@ class Store:
                             raise Error('Correction must reference an existing earlier knowledge entry')
                 elif not change['after'].startswith(current): raise Error('Append timeline corrections; preserve historical entries')
                 files[name]=change['after']
-            # A 60-turn audit is GLOBAL over ALL accumulated timeline + all
-            # permanent ID memories, not merely the last 60 scenes.
-            # It preserves every distinct fact, source, status and turn. It never
-            # attempts to summarise canon or infer who heard a statement.
+            # Every 15 turns: compact the full world timeline and the acquired
+            # memories of NPCs in the last 15 scenes (plus POV).
+            # Every 60: additionally inspect ALL ID memories and reconcile
+            # their full accumulated records with the complete active archive.
+            # No semantic paraphrasing; keep every distinct fact and source.
+            global_audit=60 in meta['audit_due']
+            target_ids=(set(meta['registry']) if global_audit else
+                        {'POV_001'} | set(packet['participants']))
             compaction=None
-            if 60 in meta['audit_due']:
+            if meta['audit_due']:
                 original_chars=0
                 updated_chars=0
                 duplicate_knowledge=0
                 knowledge_files_checked=0
-                for cid in sorted(meta['registry']):
+                for cid in sorted(target_ids):
                     name=f'knowledge/{cid}.md'
                     current=files.get(name)
                     if current is None:
@@ -680,14 +684,17 @@ class Store:
                 updated_chars+=len(compacted)
                 if compacted!=current:
                     files[name]=compacted
-                active_rows=self.active_history(path)
-                contents={name:(files.get(name) if name in files else
-                        (path/name).read_bytes().decode('utf-8'))
-                          for name in ['timeline.md',*(f'knowledge/{cid}.md' for cid in meta['registry'])]}
-                coverage=self.audit_archive_coverage(active_rows,contents,meta['registry'])
-                compaction={'scope':'all_accumulated_timeline_and_all_character_knowledge',
-                            'active_history_turns':len(active_rows),**coverage,
-                            'knowledge_files_checked':knowledge_files_checked,
+                coverage={}
+                if global_audit:
+                    active_rows=self.active_history(path)
+                    contents={name:(files.get(name) if name in files else
+                            (path/name).read_bytes().decode('utf-8'))
+                              for name in ['timeline.md',*(f'knowledge/{cid}.md' for cid in meta['registry'])]}
+                    coverage=self.audit_archive_coverage(active_rows,contents,meta['registry'])
+                    coverage['active_history_turns']=len(active_rows)
+                compaction={'scope':('all_accumulated_timeline_and_all_character_knowledge'
+                                     if global_audit else 'last_15_participants_and_timeline'),
+                            **coverage,'knowledge_files_checked':knowledge_files_checked,
                             'removed_identical_knowledge_records':duplicate_knowledge,
                             'removed_identical_timeline_blocks':duplicate_events,
                             'before_chars':original_chars,'after_chars':updated_chars,
