@@ -353,6 +353,10 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(self.store.status(self.sid)['turn'],0)
 
     def test_scene_state_refuses_new_private_knowledge_in_multiple_fields(self):
+        setup_state=state()
+        setup_state['unfinished']=['Рэй знает о скрытом письме']
+        with self.assertRaises(Error):
+            self.store.create('Анкета','Анкета',REG,relations(),setup_state)
         cases=[
             {'unfinished':['Эдриан знает о секрете Рины']},
             {'pov':{'unfinished':['Дантэ не знает про письмо']}},
