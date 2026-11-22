@@ -25,7 +25,7 @@ def inventory(root: Path, sid: str) -> dict:
     timeline = (folder / 'timeline.md').read_text(encoding='utf-8')
     knowledge = {}
     for cid in meta['registry']:
-        if not NPC.fullmatch(cid):
+        if cid != 'POV_001' and not NPC.fullmatch(cid):
             continue
         file = folder / 'knowledge' / (cid + '.md')
         knowledge[cid] = len(parse_document(file.read_text(encoding='utf-8'))) if file.exists() else None
