@@ -7,7 +7,7 @@
 1. Сохраняй исходник дословно. При настройке прочитай все части анкеты, согласуй
    противоречия и подготовь полный novel.md без сокращений. Реестр ID — POV_001,
    NPC_001 и далее, один раз на всю историю. Отдельные карточки не создавай.
-   У каждого NPC с момента регистрации отдельный пустой knowledge/NPC_ID.md;
+   У POV и каждого NPC с момента регистрации отдельный пустой knowledge/ID.md;
    это не биография, а приобретённая память.
 2. Создай предложенную сессию. Через prepare_lite_context(kind=canon) и все
    read_lite_chunk прочитай исходник, канон, начальные отношения и состояние.
@@ -35,8 +35,8 @@
 6. Сохрани Turn: уникальный request_id; expected_version; packet_id; точные
    chunk_hashes; reader_text; narration; participants; state_patch; relations;
    knowledge_review; knowledge; events или no_event_reason. В knowledge_review
-   укажи для каждого NPC из participants и каждого владельца фонового знания
-   его ID → recorded (есть запись в knowledge) либо none (нет новой информации).
+   укажи для POV_001, каждого NPC из participants и каждого владельца фонового
+   знания его ID → recorded (есть запись в knowledge) либо none (нет новой информации).
    Отсутствующий/неполный отчёт сервер не примет. Сверяй полученные
    knowledge_written, knowledge_owners и timeline_events_written.
    Патчи состояния сохраняют старые незатронутые детали. present и remote заменяются целиком при передаче;
