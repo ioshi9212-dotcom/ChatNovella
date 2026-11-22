@@ -5,6 +5,7 @@ materializing files. Interrupted commits roll forward under the lock; caught
 write failures restore the old image. No per-turn directories or database.
 """
 from __future__ import annotations
+import base64
 import contextlib
 from copy import deepcopy
 from datetime import datetime
@@ -16,6 +17,7 @@ from pathlib import Path
 import re
 import secrets
 import tempfile
+import zlib
 from typing import Any
 from .models import State, Relationships, RelationChange, Knowledge, Turn
 
@@ -65,6 +67,72 @@ def document(title, obj):
 
 def parse_document(text):
     return json.loads(text.split('```json\n', 1)[1].rsplit('\n```', 1)[0])
+
+def compact_json(value):
+    """Lossless one-record-per-line JSON; no summarisation by guessing."""
+    if isinstance(value, list):
+        if not value: return '[]'
+        return '[\n' + ',\n'.join(
+            ' ' + json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+            for row in value) + '\n]'
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+
+def compact_knowledge(text):
+    """Preserve all distinct records and all sources, statuses and acquisition turns.
+
+    Only exact duplicate rows from the same acquisition may be folded. If any
+    row refers to another by supersedes index, leave indexes and rows intact.
+    """
+    original = parse_document(text)
+    if not isinstance(original, list) or not all(isinstance(x, dict) for x in original):
+        raise Error('Invalid personal-memory document')
+    may_dedupe = not any(row.get('supersedes') is not None for row in original)
+    entries, seen, duplicates = [], set(), 0
+    for row in original:
+        key = json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+        if may_dedupe and key in seen:
+            duplicates += 1
+        else:
+            entries.append(row)
+            seen.add(key)
+    result = '# Приобретённые знания\n\n```json\n' + compact_json(entries) + '\n```\n'
+    if parse_document(result) != entries:
+        raise Error('Memory compaction invariant failed')
+    return result, duplicates
+
+_TIMELINE_BLOCK = re.compile(r'(\n+# Ход (\d+)\n\n```json\n)(.*?)(\n```)', re.S)
+
+def compact_timeline(text):
+    """Compact every stored world milestone; retain all unmatched user notes."""
+    seen, removed = set(), 0
+    def convert(match):
+        nonlocal removed
+        try: row = json.loads(match.group(3))
+        except ValueError: return match.group(0)
+        if not isinstance(row, dict) or row.get('turn') != int(match.group(2)):
+            return match.group(0)
+        key = json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+        if key in seen:
+            removed += 1
+            return ''
+        seen.add(key)
+        return match.group(1) + key + match.group(4)
+    return _TIMELINE_BLOCK.sub(convert, text), removed
+
+def packet_payload(packet):
+    """Old uncompressed packets remain readable across a software rollout."""
+    if 'payload' in packet:
+        return packet['payload']
+    if packet.get('codec') != 'zlib-base64':
+        raise Error('Unsupported packet codec')
+    try:
+        return zlib.decompress(base64.b64decode(packet['payload_z'])).decode('utf-8')
+    except (ValueError, zlib.error, UnicodeError, KeyError) as exc:
+        raise Error('Damaged compressed context packet') from exc
+
+def pack_payload(text):
+    return {'codec': 'zlib-base64',
+            'payload_z': base64.b64encode(zlib.compress(text.encode('utf-8'), level=3)).decode('ascii')}
 
 def merge(old, patch):
     result = deepcopy(old)
@@ -383,10 +451,11 @@ class Store:
             chunks=[payload[i:i+CHUNK_SIZE] for i in range(0,len(payload),CHUNK_SIZE)]
             packet_id=secrets.token_hex(16)
             packet={'version':meta['version'],'kind':kind,'reader_text':reader_text,'participants':participants,
-                    'payload':payload,'chunk_size':CHUNK_SIZE,'hashes':[digest(c) for c in chunks],'delivered':[],'files':{k:digest(v) for k,v in pieces.items()}}
-            # Keep only latest packets; bounded metadata, never delete scene history.
-            meta['packets']={k:v for k,v in list(meta['packets'].items())[-3:] if v['version']==meta['version']}
-            meta['packets'][packet_id]=packet
+                    **pack_payload(payload),'chunk_size':CHUNK_SIZE,'hashes':[digest(c) for c in chunks],
+                    'delivered':[],'files':{k:digest(v) for k,v in pieces.items()}}
+            # A single fresh context avoids copying large payloads 3 times into
+            # metadata. Each chunk receipt fsyncs only the compressed packet.
+            meta['packets']={packet_id:packet}
             atomic(path/'system/meta.json',dump(meta))
             return {'packet_id':packet_id,'version':meta['version'],'chunk_count':len(chunks),'sha256':digest(payload),
                     'chunk_size':CHUNK_SIZE,'chunk_hashes':packet['hashes'],'file_hashes':packet['files'],'characters':len(payload),'participants':participants,'audit_due':meta['audit_due']}
@@ -398,7 +467,7 @@ class Store:
             if type(index) is not int or not 0<=index<len(packet['hashes']): raise Error('Invalid chunk index')
             # Already-issued packets retain their original boundaries after rollout.
             size=packet.get('chunk_size',12000)
-            text=packet['payload'][index*size:(index+1)*size]
+            text=packet_payload(packet)[index*size:(index+1)*size]
             packet['delivered']=sorted(set(packet['delivered'])|{index})
             atomic(path/'system/meta.json',dump(meta))
             return {'index':index,'text':text,'sha256':digest(text),'version':meta['version']}
@@ -550,7 +619,7 @@ class Store:
             if 60 in meta['audit_due']: required|={'all_npc_knowledge','long_term'}
             if set(report)!=required or not all(isinstance(v,str) and v.strip() for v in report.values()): raise Error('Audit must cover each required domain with source evidence')
             # Evidence is explicit exact source quotation, not a ceremonial checkbox.
-            source=json.loads(packet['payload'])['files']
+            source=json.loads(packet_payload(packet))['files']
             joined='\n'.join(source.values())
             joined+='\n'+'\n'.join(row['narration'] for row in json.loads(source['recent_scenes.json']))
             for text in report.values():
@@ -595,7 +664,8 @@ class Store:
             # Reuse lossless packets for arbitrarily large archive queries.
             pid=secrets.token_hex(16)
             chunks=[text[i:i+CHUNK_SIZE] for i in range(0,len(text),CHUNK_SIZE)]
-            meta['packets'][pid]={'kind':'history','version':meta['version'],'payload':text,'chunk_size':CHUNK_SIZE,'hashes':[digest(c) for c in chunks],'delivered':[]}
+            meta['packets'][pid]={'kind':'history','version':meta['version'],**pack_payload(text),
+                                  'chunk_size':CHUNK_SIZE,'hashes':[digest(c) for c in chunks],'delivered':[]}
             while len(meta['packets'])>4: del meta['packets'][next(iter(meta['packets']))]
             atomic(path/'system/meta.json',dump(meta))
             return {'packet_id':pid,'chunk_count':len(chunks),'chunk_size':CHUNK_SIZE,'chunk_hashes':[digest(c) for c in chunks],'sha256':digest(text),'turns':len(rows)}
