@@ -680,8 +680,13 @@ class Store:
                 updated_chars+=len(compacted)
                 if compacted!=current:
                     files[name]=compacted
+                active_rows=self.active_history(path)
+                contents={name:(files.get(name) if name in files else
+                        (path/name).read_bytes().decode('utf-8'))
+                          for name in ['timeline.md',*(f'knowledge/{cid}.md' for cid in meta['registry'])]}
+                coverage=self.audit_archive_coverage(active_rows,contents,meta['registry'])
                 compaction={'scope':'all_accumulated_timeline_and_all_character_knowledge',
-                            'active_history_turns':len(self.active_history(path)),
+                            'active_history_turns':len(active_rows),**coverage,
                             'knowledge_files_checked':knowledge_files_checked,
                             'removed_identical_knowledge_records':duplicate_knowledge,
                             'removed_identical_timeline_blocks':duplicate_events,
@@ -695,6 +700,50 @@ class Store:
             result=self.status_of(new)
             if compaction is not None: result['audit_compaction']=compaction
             return result
+
+    @staticmethod
+    def audit_archive_coverage(rows, files, registry):
+        """Cross-check all committed personal knowledge and world events.
+
+        Archive turns remain the immutable evidence source. This checks loss,
+        NOT whether a writer inferred a character's senses correctly.
+        """
+        knowledge_keys=set()
+        for cid in registry:
+            name=f'knowledge/{cid}.md'
+            text=files.get(name)
+            if text is None: continue
+            for entry in parse_document(text):
+                knowledge_keys.add((cid,entry.get('turn'),entry.get('fact'),entry.get('status'),
+                                    entry.get('source_kind'),tuple(entry.get('source_ids',[])),
+                                    entry.get('source'),entry.get('evidence')))
+        timeline_keys=set()
+        timeline=files['timeline.md']
+        for body in re.findall(r'```json\n(.*?)\n```',timeline,re.S):
+            try: data=json.loads(body)
+            except ValueError: continue
+            for entry in data if isinstance(data,list) else [data]:
+                if isinstance(entry,dict) and 'event' in entry:
+                    timeline_keys.add((entry.get('turn'),entry.get('date'),
+                                       tuple(entry.get('participants',[])),
+                                       entry.get('event'),entry.get('consequence')))
+        expected_knowledge=set()
+        expected_events=set()
+        for row in rows:
+            for entry in row.get('knowledge',[]):
+                expected_knowledge.add((entry['npc_id'],row['turn'],entry['fact'],entry['status'],
+                                        entry['source_kind'],tuple(entry['source_ids']),
+                                        entry['source'],entry['evidence']))
+            for event in row.get('events',[]):
+                expected_events.add((row['turn'],event['date'],tuple(event['participants']),
+                                     event['event'],event['consequence']))
+        missing_k=expected_knowledge-knowledge_keys
+        missing_e=expected_events-timeline_keys
+        if missing_k or missing_e:
+            raise Error(f'60-turn archive reconciliation failed: {len(missing_k)} missing knowledge acquisitions, '
+                        f'{len(missing_e)} missing world events; repair from primary turn evidence before finalising audit')
+        return {'verified_knowledge_acquisitions':len(expected_knowledge),
+                'verified_world_events':len(expected_events)}
 
     def read_history(self,sid,start=1,end=None,query=''):
         with self.locked(sid) as (path,meta):
