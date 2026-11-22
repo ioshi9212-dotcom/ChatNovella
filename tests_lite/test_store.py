@@ -50,7 +50,7 @@ class StoreTests(unittest.TestCase):
         if 'knowledge_review' not in changes:
             owners={entry['npc_id'] for entry in d['knowledge']}
             d['knowledge_review']={cid:('recorded' if cid in owners else 'none')
-                                   for cid in set(d['participants']) | owners}
+                                   for cid in {'POV_001'} | set(d['participants']) | owners}
         return d
     def audit(self):
         p,text=self.packet('',kind='audit')
@@ -332,12 +332,13 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(restarted.status(self.sid)['registry']['NPC_004'],'Кай')
 
     def test_registered_npcs_have_empty_private_files_but_no_character_cards(self):
-        for cid in ('NPC_001','NPC_002','NPC_003'):
+        for cid in ('POV_001','NPC_001','NPC_002','NPC_003'):
             self.assertEqual(parse_document(self.read(f'knowledge/{cid}.md')),[])
             self.assertFalse((self.store.path(self.sid)/'characters'/cid).exists())
         _,text=self.packet(participants=['NPC_001'])
         files=json.loads(text)['files']
         self.assertIn('knowledge/NPC_001.md',files)
+        self.assertIn('knowledge/POV_001.md',files)
         self.assertNotIn('knowledge/NPC_002.md',files)
 
     def test_knowledge_review_is_required_and_must_match_written_owners(self):
@@ -349,7 +350,7 @@ class StoreTests(unittest.TestCase):
         with self.assertRaises(Error):
             self.store.commit(self.sid,**self.payload(knowledge_review={}))
         with self.assertRaises(Error):
-            self.store.commit(self.sid,**self.payload(knowledge_review={'NPC_001':'recorded'}))
+            self.store.commit(self.sid,**self.payload(knowledge_review={'POV_001':'none','NPC_001':'recorded'}))
         self.assertEqual(self.store.status(self.sid)['turn'],0)
 
     def test_scene_state_refuses_new_private_knowledge_in_multiple_fields(self):
