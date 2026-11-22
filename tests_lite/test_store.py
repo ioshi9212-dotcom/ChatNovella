@@ -5,7 +5,7 @@ import tempfile
 import shutil
 import unittest
 from unittest.mock import patch
-from chatnovella_lite.store import Store, Error, digest, parse_document, dump, document
+from chatnovella_lite.store import Store, Error, digest, parse_document, dump, document, packet_payload, compact_knowledge, compact_timeline
 
 BASE=Path(__file__).resolve().parents[1]
 REG={'POV_001':'Рина','NPC_001':'Рэй','NPC_002':'Джун','NPC_003':'Мики'}
@@ -255,7 +255,13 @@ class StoreTests(unittest.TestCase):
                     self.assertEqual(set(p['participants']),set(REG)-{'POV_001'})
                     self.assertIn('Поезд отменён.',data['files']['knowledge/NPC_003.md'])
                 with self.assertRaises(Error): self.store.finish_audit(self.sid,p['version'],p['packet_id'],p['chunk_hashes'],{}, {})
-                self.audit()
+                result=self.audit()
+                if i==60:
+                    compact=result['audit_compaction']
+                    self.assertEqual(compact['scope'],'all_accumulated_timeline_and_all_character_knowledge')
+                    self.assertEqual(compact['active_history_turns'],60)
+                    self.assertEqual(compact['knowledge_files_checked'],len(REG))
+                    self.assertGreaterEqual(compact['saved_chars'],0)
         st=self.store.status(self.sid)
         self.assertEqual(st['turn'],60)
         self.assertEqual(st['audit_due'],[])
@@ -441,6 +447,69 @@ class StoreTests(unittest.TestCase):
         self.store.commit(self.sid,**self.payload(state_patch={'unfinished':['назначить встречу']}))
         self.assertEqual(parse_document(path.read_text())['unfinished'],['назначить встречу'])
 
+    def test_60_audit_compacts_exact_repeats_without_losing_sources_or_earlier_turns(self):
+        # One old milestone and own knowledge survive the full sequence.
+        quote='Рэй услышал пароль от Джуна.'
+        info=dict(npc_id='NPC_001',fact='Джун знает пароль.',status='knows',
+                  source_kind='told',source_ids=['NPC_002'],source='Лично сказал Джун.',
+                  evidence=quote)
+        event=dict(date=None,participants=['NPC_001','NPC_002'],
+                   event='Джун передал код доступа Рэю.',
+                   consequence='Рэй теперь может открыть скрытый проход.')
+        self.store.commit(self.sid,**self.payload(narration=quote,knowledge=[info],events=[event]))
+        for i in range(2,61):
+            self.store.commit(self.sid,**self.payload())
+            if i in (15,30,45): self.audit()
+        # Emulate two redundant *identical* entries inherited from a legacy
+        # writer. Keep the uniquely sourced original untouched.
+        path=self.store.path(self.sid)
+        original=parse_document(self.read('knowledge/NPC_001.md'))
+        self.assertEqual(len(original),1)
+        (path/'knowledge/NPC_001.md').write_text(document('Приобретённые знания',original+[original[0]]))
+        timeline=self.read('timeline.md')
+        import re
+        event_block=re.search(r'\n# Ход 1\n\n```json\n.*?\n```',timeline,re.S)
+        self.assertIsNotNone(event_block)
+        (path/'timeline.md').write_text(timeline+event_block.group(0))
+        p,raw=self.packet('',kind='audit')
+        files=json.loads(raw)['files']
+        self.assertIn('knowledge/NPC_001.md',files)
+        self.assertIn('Джун передал код доступа Рэю.',files['timeline.md'])
+        result=self.audit()
+        stats=result['audit_compaction']
+        self.assertEqual(stats['removed_identical_knowledge_records'],1)
+        self.assertEqual(stats['removed_identical_timeline_blocks'],1)
+        self.assertGreater(stats['saved_chars'],0)
+        after=parse_document(self.read('knowledge/NPC_001.md'))
+        self.assertEqual(after,original)
+        self.assertIn('Лично сказал Джун.',self.read('knowledge/NPC_001.md'))
+        self.assertEqual(self.read('timeline.md').count('Джун передал код доступа Рэю.'),1)
+        self.assertEqual(len(self.store.active_history(path)),60)
+        self.assertNotIn('audit_compaction',self.store.status(self.sid))
+
+    def test_compaction_preserves_refutations_and_raw_timeline_notes(self):
+        first=dict(npc_id='NPC_001',fact='Пароль старый.',status='mistaken',
+                   source='Личное сообщение.',source_ids=['NPC_002'],source_kind='message',
+                   evidence='Рэй прочитал старый пароль.',turn=1,date=None,
+                   event_index=None,supersedes=None)
+        second=dict(first,fact='Пароль изменён.',status='refuted',supersedes=1,turn=2)
+        old=document('Приобретённые знания',[first,first,second])
+        new,removed=compact_knowledge(old)
+        self.assertEqual(removed,0)  # keep supersedes indexes stable
+        self.assertEqual(parse_document(new),[first,first,second])
+        legacy='# Хронология игровых событий\n\nНепроверенная авторская заметка.\n'
+        compacted,removed=compact_timeline(legacy)
+        self.assertEqual((compacted,removed),(legacy,0))
+
+    def test_packet_reprepare_discards_old_context_to_avoid_metadata_bloat(self):
+        first,_=self.packet(read=False)
+        second,_=self.packet(read=False)
+        meta=json.loads((self.store.path(self.sid)/'system/meta.json').read_text())
+        self.assertEqual(set(meta['packets']),{second['packet_id']})
+        self.assertIn('payload_z',next(iter(meta['packets'].values())))
+        with self.assertRaises(Error):
+            self.store.read_chunk(self.sid,first['packet_id'],0)
+
     def test_16k_chunks_and_existing_12k_packet_survive_rollout(self):
         p,_=self.packet(read=False)
         self.assertEqual(p['chunk_size'],16000)
@@ -448,8 +517,12 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(len(first['text']),16000)
         meta_path=self.store.path(self.sid)/'system/meta.json'
         meta=json.loads(meta_path.read_text());packet=meta['packets'][p['packet_id']]
+        self.assertIn('payload_z',packet)
+        self.assertNotIn('payload',packet)
+        text=packet_payload(packet)
+        packet.pop('codec');packet.pop('payload_z')
+        packet['payload']=text  # emulate a packet issued before compression
         packet.pop('chunk_size')
-        text=packet['payload']
         legacy=[text[i:i+12000] for i in range(0,len(text),12000)]
         packet['hashes']=[digest(c) for c in legacy];packet['delivered']=[]
         meta_path.write_text(dump(meta))
