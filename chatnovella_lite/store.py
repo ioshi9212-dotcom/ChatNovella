@@ -199,6 +199,7 @@ class Store:
         if not all((key=='POV_001' or NPC.fullmatch(key)) and isinstance(name,str) and name.strip() for key,name in registry.items()):
             raise Error('Invalid permanent character registry')
         state = State.model_validate(state).model_dump()
+        check_state_patch_scope(state)
         if state['turn'] != 0:
             raise Error('Setup turn must be zero')
         self.validate_state(state,registry)
@@ -254,6 +255,7 @@ class Store:
             if meta['approved']: raise Error('Setup is locked; use an explicitly approved canon amendment')
             if not novel_text.strip(): raise Error('Full proposed canon required')
             state=State.model_validate(state).model_dump()
+            check_state_patch_scope(state)
             if state['turn']!=0: raise Error('Setup turn must be zero')
             self.validate_state(state,meta['registry'])
             rel=Relationships.model_validate(relationships).model_dump()
