@@ -479,7 +479,12 @@ class Store:
                 if event['date'] is not None:
                     try: datetime.fromisoformat(event['date'])
                     except (TypeError,ValueError): raise Error('Event date must be ISO or null')
-                timeline+='\n'+document(f'Ход {turn}',{**event,'turn':turn})
+                # Timeline is the compact world index. The detailed justification
+                # stays in the full immutable turn record in history.jsonl.
+                timeline+='\n'+document(f'Ход {turn}',{
+                    'turn':turn,'date':event['date'],'participants':event['participants'],
+                    'event':event['event'],'consequence':event['consequence'],
+                    'significance':event['significance']})
             files['timeline.md']=timeline
             for entry in data['knowledge']:
                 cid=entry['npc_id']
