@@ -66,7 +66,7 @@ def read_lite_chunk(session_id:str,packet_id:str,index:int) -> dict[str,Any]:
 
 @mcp.tool()
 def save_lite_turn(session_id:str,turn:Turn) -> dict[str,Any]:
-    """Write directly by the current Skin Builder, not past scenes; no additional repeated full style reviews. Atomically persist scene plus state and justified memory/relationship/events. Publish narration only after saved=true. Reuse request_id on retry."""
+    """Write directly by the current Skin Builder, not past scenes; no additional repeated full style reviews. Atomically persist scene, per-ID POV/NPC knowledge, and important world milestones. Turn requires knowledge_review for POV and every participant/knowledge owner, plus significance and significance_reason for each event. Publish narration only after saved=true. Reuse request_id on retry."""
     return store.commit(session_id,**turn.model_dump())
 
 @mcp.tool()
