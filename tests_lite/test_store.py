@@ -256,6 +256,9 @@ class StoreTests(unittest.TestCase):
                     self.assertIn('Поезд отменён.',data['files']['knowledge/NPC_003.md'])
                 with self.assertRaises(Error): self.store.finish_audit(self.sid,p['version'],p['packet_id'],p['chunk_hashes'],{}, {})
                 result=self.audit()
+                self.assertIn('audit_compaction',result)
+                if i in (15,30,45):
+                    self.assertEqual(result['audit_compaction']['scope'],'last_15_participants_and_timeline')
                 if i==60:
                     compact=result['audit_compaction']
                     self.assertEqual(compact['scope'],'all_accumulated_timeline_and_all_character_knowledge')
@@ -460,9 +463,23 @@ class StoreTests(unittest.TestCase):
         for i in range(2,61):
             self.store.commit(self.sid,**self.payload())
             if i in (15,30,45): self.audit()
+        # A 60-turn audit must detect missing archived facts/events before
+        # accepting a compacted projection; failed attempts do not finish audit.
+        path=self.store.path(self.sid)
+        initial_knowledge=self.read('knowledge/NPC_001.md')
+        initial_timeline=self.read('timeline.md')
+        (path/'knowledge/NPC_001.md').write_text(document('Приобретённые знания',[]))
+        with self.assertRaisesRegex(Error,'reconciliation failed'):
+            self.audit()
+        self.assertEqual(self.store.status(self.sid)['audit_due'],[15,60])
+        (path/'knowledge/NPC_001.md').write_text(initial_knowledge)
+        (path/'timeline.md').write_text('# Хронология игровых событий\n')
+        with self.assertRaisesRegex(Error,'reconciliation failed'):
+            self.audit()
+        self.assertEqual(self.store.status(self.sid)['audit_due'],[15,60])
+        (path/'timeline.md').write_text(initial_timeline)
         # Emulate two redundant *identical* entries inherited from a legacy
         # writer. Keep the uniquely sourced original untouched.
-        path=self.store.path(self.sid)
         original=parse_document(self.read('knowledge/NPC_001.md'))
         self.assertEqual(len(original),1)
         (path/'knowledge/NPC_001.md').write_text(document('Приобретённые знания',original+[original[0]]))
@@ -486,6 +503,34 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(self.read('timeline.md').count('Джун передал код доступа Рэю.'),1)
         self.assertEqual(len(self.store.active_history(path)),60)
         self.assertNotIn('audit_compaction',self.store.status(self.sid))
+
+    def test_120th_global_audit_reads_knowledge_from_turn_one(self):
+        quote='Рэй услышал код на первом ходу.'
+        item=dict(npc_id='NPC_001',fact='Первый код от сейфа.',status='knows',
+                  source_kind='told',source_ids=['NPC_002'],
+                  source='Джун вслух произнёс код.',evidence=quote)
+        first_event=dict(date=None,participants=['NPC_001'],
+                         event='Первый код был передан Рэю.',
+                         consequence='Рэй получил доступ к хранилищу.')
+        self.store.commit(self.sid,**self.payload(narration=quote,knowledge=[item],events=[first_event]))
+        for turn in range(2,121):
+            self.store.commit(self.sid,**self.payload())
+            if turn % 15 == 0 and turn < 120:
+                self.audit()
+        packet,text=self.packet('',kind='audit')
+        files=json.loads(text)['files']
+        self.assertEqual(len(json.loads(files['recent_scenes.json'])),15)
+        self.assertIn('Первый код от сейфа.',files['knowledge/NPC_001.md'])
+        self.assertIn('Первый код был передан Рэю.',files['timeline.md'])
+        result=self.store.finish_audit(self.sid,packet['version'],packet['packet_id'],packet['chunk_hashes'],
+            {k:'Полная анкета.' for k in ['continuity','relationships','knowledge','time_state','timeline',
+                                          'all_npc_knowledge','long_term']},{})
+        stats=result['audit_compaction']
+        self.assertEqual(stats['scope'],'all_accumulated_timeline_and_all_character_knowledge')
+        self.assertEqual(stats['active_history_turns'],120)
+        self.assertEqual(stats['verified_knowledge_acquisitions'],1)
+        self.assertEqual(stats['verified_world_events'],1)
+        self.assertEqual(len(self.store.active_history(self.store.path(self.sid))),120)
 
     def test_compaction_preserves_refutations_and_raw_timeline_notes(self):
         first=dict(npc_id='NPC_001',fact='Пароль старый.',status='mistaken',
