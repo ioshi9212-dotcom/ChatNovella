@@ -651,11 +651,50 @@ class Store:
                             raise Error('Correction must reference an existing earlier knowledge entry')
                 elif not change['after'].startswith(current): raise Error('Append timeline corrections; preserve historical entries')
                 files[name]=change['after']
+            # A 60-turn audit is GLOBAL over ALL accumulated timeline + all
+            # permanent ID memories, not merely the last 60 scenes.
+            # It preserves every distinct fact, source, status and turn. It never
+            # attempts to summarise canon or infer who heard a statement.
+            compaction=None
+            if 60 in meta['audit_due']:
+                original_chars=0
+                updated_chars=0
+                duplicate_knowledge=0
+                knowledge_files_checked=0
+                for cid in sorted(meta['registry']):
+                    name=f'knowledge/{cid}.md'
+                    current=files.get(name)
+                    if current is None:
+                        current=(path/name).read_bytes().decode('utf-8') if (path/name).exists() else document('Приобретённые знания',[])
+                    compacted,duplicates=compact_knowledge(current)
+                    original_chars+=len(current)
+                    updated_chars+=len(compacted)
+                    duplicate_knowledge+=duplicates
+                    knowledge_files_checked+=1
+                    if compacted!=current or not (path/name).exists():
+                        files[name]=compacted
+                name='timeline.md'
+                current=files.get(name,(path/name).read_bytes().decode('utf-8'))
+                compacted,duplicate_events=compact_timeline(current)
+                original_chars+=len(current)
+                updated_chars+=len(compacted)
+                if compacted!=current:
+                    files[name]=compacted
+                compaction={'scope':'all_accumulated_timeline_and_all_character_knowledge',
+                            'active_history_turns':len(self.active_history(path)),
+                            'knowledge_files_checked':knowledge_files_checked,
+                            'removed_identical_knowledge_records':duplicate_knowledge,
+                            'removed_identical_timeline_blocks':duplicate_events,
+                            'before_chars':original_chars,'after_chars':updated_chars,
+                            'saved_chars':original_chars-updated_chars}
             new=deepcopy(meta)
             new.update(version=meta['version']+1,packets={},audit_due=[])
-            new['operations'].append({'kind':'audit','turn':meta['turn'],'scope':meta['audit_due'],'report':report,'corrections':corrections})
+            new['operations'].append({'kind':'audit','turn':meta['turn'],'scope':meta['audit_due'],
+                                      'report':report,'corrections':corrections,'compaction':compaction})
             self.transaction(path,meta,files,new)
-            return self.status_of(new)
+            result=self.status_of(new)
+            if compaction is not None: result['audit_compaction']=compaction
+            return result
 
     def read_history(self,sid,start=1,end=None,query=''):
         with self.locked(sid) as (path,meta):
