@@ -388,6 +388,18 @@ class StoreTests(unittest.TestCase):
             self.store.commit(self.sid,**self.payload(narration=quote,knowledge=[item]))
         self.assertEqual(len(parse_document(self.read('knowledge/NPC_001.md'))),1)
 
+    def test_pov_acquired_knowledge_has_own_file_and_is_not_scene_state(self):
+        quote='Рэй вслух назвал Рине пароль от сейфа.'
+        entry=dict(npc_id='POV_001',fact='Пароль от сейфа: тридцать два.',status='knows',
+                   source_kind='told',source_ids=['NPC_001'],source='Рэй сказал Рине вслух.',
+                   evidence=quote)
+        before=self.read('timeline.md')
+        saved=self.store.commit(self.sid,**self.payload(narration=quote,knowledge=[entry]))
+        self.assertEqual(saved['knowledge_owners'],['POV_001'])
+        self.assertIn('Пароль от сейфа',self.read('knowledge/POV_001.md'))
+        self.assertEqual(self.read('timeline.md'),before)
+        self.assertNotIn('пароль',self.read('state.md').casefold())
+
     def test_offscreen_observation_stays_private_without_timeline_event(self):
         before=self.read('timeline.md')
         item=dict(npc_id='NPC_003',fact='Пригородный поезд отменён.',status='knows',
