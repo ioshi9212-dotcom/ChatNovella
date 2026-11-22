@@ -46,7 +46,7 @@ class Event(Model):
     significance_reason: str = Field(min_length=12, max_length=240)
 
 class Knowledge(Model):
-    npc_id: str
+    npc_id: str = Field(description='Owner ID for personal memory: POV_001 or NPC_### (legacy field name).')
     fact: str = Field(min_length=1)
     status: Literal['knows', 'suspects', 'mistaken', 'refuted']
     source_kind: Literal['witnessed', 'told', 'phone', 'message', 'inference', 'offscreen']
@@ -68,7 +68,7 @@ class Turn(Model):
     relations: list[RelationChange] = []
     # Every active NPC (and each offscreen knowledge owner) must be reviewed
     # explicitly. 'recorded' requires a personal-memory entry for that owner.
-    knowledge_review: dict[str, Literal['recorded', 'none']]
+    knowledge_review: dict[str, Literal['recorded', 'none']] = Field(description='Explicit check for POV_001, all active NPC participants and each offscreen memory owner. recorded requires a knowledge entry; none means no new acquisition.')
     knowledge: list[Knowledge] = []
     events: list[Event] = []
     no_event_reason: str = ''
