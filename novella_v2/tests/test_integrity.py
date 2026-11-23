@@ -178,6 +178,24 @@ class TestV2Integrity(unittest.TestCase):
         with self.assertRaisesRegex(EngineError, "reader text differ"):
             self.engine.commit(self.sid, data)
 
+    def test_eight_simultaneous_commits_save_exactly_one_turn(self):
+        p, _ = self.packet()
+
+        def compete(index):
+            try:
+                data = self.turn(p, request_id="competitor-" + str(index))
+                self.engine.commit(self.sid, data)
+                return "saved"
+            except EngineError as error:
+                return error.code
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            outcomes = list(pool.map(compete, range(8)))
+        self.assertEqual(outcomes.count("saved"), 1)
+        self.assertEqual(outcomes.count("STALE_VERSION"), 7)
+        self.assertEqual(len(self.engine.history(self.sid)), 1)
+        self.assertEqual(self.engine.status(self.sid)["turn"], 1)
+
     def test_replay_after_restarted_engine_is_idempotent(self):
         p, _ = self.packet()
         data = self.turn(p)
