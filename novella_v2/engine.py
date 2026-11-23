@@ -21,6 +21,8 @@ import shutil
 import tempfile
 from typing import Any
 
+from . import threads as open_threads
+
 CHUNK_SIZE = 36_000  # Unicode code points, not UTF-8 bytes
 SESSION = re.compile(r"^NV2_[0-9a-f]{24}$")
 IDENT = re.compile(r"^[a-z][a-z0-9_]{1,49}$")
@@ -93,7 +95,7 @@ def atomic(path: Path, content: str) -> None:
 
 def safe_rel(name: str) -> bool:
     return (name in {"state.md", "relationships.md", "timeline.md", "history.jsonl",
-                     "system/audit.jsonl", "novel.md"}
+                     "open_threads.md", "system/audit.jsonl", "novel.md"}
             or bool(re.fullmatch(r"(?:characters|knowledge)/[a-z][a-z0-9_]{1,49}\.md", name)))
 
 
@@ -390,7 +392,8 @@ class Engine:
 
     def create(self, original: str, blocks: list[dict], names: dict[str, str],
                genre_answers: dict[str, str] | None = None,
-               relationships: dict | None = None) -> dict:
+               relationships: dict | None = None,
+               initial_threads: list[dict] | None = None) -> dict:
         need(isinstance(original, str) and bool(original.strip()), "ORIGINAL_REQUIRED",
              "Complete original author's text is required")
         need(isinstance(names, dict) and all(isinstance(v, str) and v.strip()
@@ -441,6 +444,7 @@ class Engine:
                 "".join(partitions["novel"]) + "\n" + cast_text + extra
         candidate_relations = validate_relations(
             relationships or {"npc_to_pov": {}, "npc_to_npc": {}}, set(names) - {"pov"})
+        initial_open_threads = open_threads.seed(initial_threads, original)
         sid = "NV2_" + secrets.token_hex(12)
         tmp = Path(tempfile.mkdtemp(prefix=".new-", dir=self.root))
         try:
@@ -448,6 +452,7 @@ class Engine:
                      "relationships.md": dump(candidate_relations),
                      "state.md": dump(empty_state()),
                      "timeline.md": "# Хронология\n",
+                     "open_threads.md": initial_open_threads,
                      "history.jsonl": "", "system/audit.jsonl": ""}
             for name in set(names) | ({"pov"} if partitions["pov"] else set()):
                 files["characters/" + name + ".md"] = CHARACTER_RULE + "".join(partitions[name])
@@ -551,6 +556,8 @@ class Engine:
     @staticmethod
     def _source_signature(path: Path, relevant: set[str], kind: str) -> list[list]:
         names = ["novel.md", "state.md", "relationships.md", "timeline.md"]
+        if (path / "open_threads.md").exists():
+            names.append("open_threads.md")
         if kind == "canon":
             names.append("original.txt")
         for name in sorted(relevant):
@@ -640,14 +647,19 @@ class Engine:
             if kind == "canon":
                 files = {"original.txt": self._read(path, "original.txt"),
                          "novel.md": self._read(path, "novel.md"),
-                         "relationships.md": self._read(path, "relationships.md")}
+                         "relationships.md": self._read(path, "relationships.md"),
+                         "open_threads.md": (self._read(path, "open_threads.md")
+                            if (path / "open_threads.md").exists() else open_threads.HEADER)}
                 need(digest(files["original.txt"]) == meta["original_hash"],
                      "ORIGINAL_CORRUPTED", "Author's original source no longer matches")
             else:
                 files = {"novel.md": self._read(path, "novel.md"),
                          "state.md": self._read(path, "state.md"),
                          "relationships.md": self._read(path, "relationships.md"),
-                         "timeline.md": self._read(path, "timeline.md")}
+                         "timeline.md": self._read(path, "timeline.md"),
+                         "open_threads.md": (self._read(path, "open_threads.md")
+                             if (path / "open_threads.md").exists() else open_threads.HEADER)}
+            open_threads.parse(files["open_threads.md"])
             if meta.get("novel_hash"):
                 need(digest(files["novel.md"]) == meta["novel_hash"],
                      "CANON_CHANGED", "Main questionnaire changed outside the engine")
@@ -756,8 +768,9 @@ class Engine:
         required = {"request_id", "expected_version", "packet_id", "chunk_hashes",
                     "reader_text", "narration", "participants", "state",
                     "knowledge", "events", "relations"}
-        need(isinstance(data, dict) and set(data) == required, "TURN_FIELDS",
-             "Turn payload has fixed storage fields")
+        need(isinstance(data, dict) and
+             (set(data) == required or set(data) == required | {"thread_updates"}),
+             "TURN_FIELDS", "Turn payload has fixed storage fields")
         req = data["request_id"]
         need(isinstance(req, str) and 1 <= len(req) <= 100, "REQUEST_ID", "Invalid request id")
         request_hash = digest(dump(data))
@@ -808,6 +821,11 @@ class Engine:
                     raise EngineError("TIME_FORMAT", "Use compatible datetime offsets", 422)
             before_rel = self._read(path, "relationships.md")
             before_timeline = self._read(path, "timeline.md")
+            before_threads = (self._read(path, "open_threads.md")
+                              if (path / "open_threads.md").exists() else open_threads.HEADER)
+            updates = data.get("thread_updates", [])
+            after_threads, thread_changes = open_threads.apply(
+                before_threads, updates, data["narration"], meta["turn"] + 1)
             need(isinstance(data["relations"], list), "RELATION_CHANGES", "Relations must be a list")
             for change in data["relations"]:
                 if isinstance(change, dict):
@@ -817,6 +835,9 @@ class Engine:
             files = {"state.md": dump(state), "relationships.md": after_rel}
             before = {"state.md": self._read(path, "state.md"),
                       "relationships.md": before_rel, "timeline.md": before_timeline}
+            if after_threads != before_threads:
+                files["open_threads.md"] = after_threads
+                before["open_threads.md"] = before_threads
             need(isinstance(data["knowledge"], list), "KNOWLEDGE_TYPE",
                  "Knowledge entries must be a list")
             knowledge_rows: list[dict] = []
@@ -871,6 +892,7 @@ class Engine:
                       "reader_text": data["reader_text"], "narration": data["narration"],
                       "participants": list(used), "knowledge": knowledge_rows,
                       "events": data["events"], "relations": data["relations"],
+                      "thread_updates": thread_changes,
                       "warnings": warnings}
             due = 60 if (meta["turn"] + 1) % 60 == 0 else \
                   15 if (meta["turn"] + 1) % 15 == 0 else 0
@@ -964,6 +986,11 @@ class Engine:
             # Deterministically reconcile every committed fact/milestone with
             # its authoritative original scene archive. This catches loss or
             # accidental editing; semantic accuracy remains the writer's duty.
+            # The working index is bounded and has no closed lines or stale
+            # duplicate IDs. Full evidence of closures stays in history.jsonl.
+            open_threads.parse(self._read(path, "open_threads.md")
+                               if (path / "open_threads.md").exists()
+                               else open_threads.HEADER)
             archived = self._active(path)
             existing_files: dict[str, str] = {}
             for old_turn in archived:
