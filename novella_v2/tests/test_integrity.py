@@ -96,7 +96,7 @@ class TestV2Integrity(unittest.TestCase):
         self.assertEqual((self.root / "storage" / other / "original.txt").read_bytes(),
                          src.encode("utf-8"))
         with self.assertRaisesRegex(EngineError, "Confirm canon"):
-            self.engine.prepare(self.sid + "0", kind="turn")  # Invalid ID/unknown session
+            self.engine.prepare(other, kind="turn")
 
     def test_original_source_emoji_and_36k_chunks(self):
         source = "Начало\r\n" + "🌙Адриан⚡" * 12000 + "\r\nКонец"
