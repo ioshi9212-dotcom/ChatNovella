@@ -248,7 +248,9 @@ class AuditFixes(unittest.TestCase):
         self.store.rollback(self.sid, first["version"], old["request_id"], "Исправление")
         for n in range(2, 104):
             self.complete_audit()
-            self.store.commit(self.sid, self.turn(n-1, reader="Ввод " + str(n)))
+            data = self.turn(n-1, reader="Ввод " + str(n))
+            data["request_id"] = "replacement-" + str(n)
+            self.store.commit(self.sid, data)
         with self.assertRaisesRegex(EngineError, "reused"):
             self.store.commit(self.sid, old)
 
