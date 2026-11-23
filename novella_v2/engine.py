@@ -1161,6 +1161,10 @@ class Engine:
             for old_turn in archived:
                 for fact in old_turn.get("knowledge", []):
                     owner = fact["owner"]
+                    need(fact["source"] in old_turn["narration"] and
+                         (owner == "pov" or owner in old_turn["participants"]),
+                         "AUDIT_KNOWLEDGE_PROVENANCE",
+                         "Archived personal fact has no witnessed source in its own scene")
                     filename = "knowledge/" + owner + ".md"
                     if filename not in existing_files:
                         existing_files[filename] = changes.get(
@@ -1170,6 +1174,20 @@ class Engine:
                     need(marker in existing_files[filename],
                          "AUDIT_MISSING_KNOWLEDGE",
                          "A previously saved personal fact disappeared from " + filename)
+                for relation in old_turn.get("relations", []):
+                    src, dst = relation["source"], relation["target"]
+                    need((src == "pov" or src in old_turn["participants"]) and
+                         (dst == "pov" or dst in old_turn["participants"]),
+                         "AUDIT_RELATION_PROVENANCE",
+                         "Archived relationship update lacks involved participants")
+                    if relation.get("evidence") is not None:
+                        need(relation["evidence"] in old_turn["narration"],
+                             "AUDIT_RELATION_PROVENANCE",
+                             "Relationship change evidence is absent from its scene")
+                for thread in old_turn.get("thread_updates", []):
+                    need(thread["source"] in old_turn["narration"],
+                         "AUDIT_THREAD_PROVENANCE",
+                         "Thread change is not anchored to its saved scene")
                 if old_turn.get("events"):
                     if "timeline.md" not in existing_files:
                         existing_files["timeline.md"] = changes.get(
