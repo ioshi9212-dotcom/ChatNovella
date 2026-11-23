@@ -397,12 +397,13 @@ class Engine:
 
     def prepare(self, sid: str, reader_text: str = "",
                 participants: list[str] | None = None, kind: str = "turn") -> dict:
-        need(kind in ("turn", "audit"), "CONTEXT_KIND", "Unsupported context kind")
+        need(kind in ("turn", "audit", "canon"), "CONTEXT_KIND", "Unsupported context kind")
         need(isinstance(reader_text, str), "INPUT_TEXT", "Reader input must be text")
         with self._locked(sid) as (path, meta):
-            need(meta["approved"], "NOT_APPROVED", "Confirm canon before writing")
-            need((kind == "audit") == bool(meta["audit_due"]), "AUDIT_GATE",
-                 "Audit is required at turn 15/60 before another scene")
+            if kind != "canon":
+                need(meta["approved"], "NOT_APPROVED", "Confirm canon before writing")
+                need((kind == "audit") == bool(meta["audit_due"]), "AUDIT_GATE",
+                     "Audit is required at turn 15/60 before another scene")
             cast = self._cast(path)
             state = json.loads(self._read(path, "state.md"))
             if kind == "turn":
@@ -413,25 +414,33 @@ class Engine:
                  and len(given) == len(set(given)), "PARTICIPANTS",
                  "Participants must be unique English names")
             relevant = set(given) | set(state["present"]) | set(state["remote"])
-            if kind == "audit":
+            if kind == "canon":
+                relevant = cast
+            elif kind == "audit":
                 for row in self._active(path)[-15:]:
                     relevant.update(row.get("participants", []))
                 if meta["audit_due"] == 60:
                     relevant = cast
             need(relevant <= cast, "UNKNOWN_CHARACTER", "Character not registered in novel")
-            files = {"engine/rules.md": self._read(self.instructions, "rules.md"),
-                     "engine/skin_builder.md": self._read(self.instructions, "skin_builder.md"),
-                     "novel.md": self._read(path, "novel.md"),
-                     "state.md": self._read(path, "state.md"),
-                     "relationships.md": self._read(path, "relationships.md"),
-                     "timeline.md": self._read(path, "timeline.md")}
+            if kind == "canon":
+                files = {"original.txt": self._read(path, "original.txt"),
+                         "novel.md": self._read(path, "novel.md"),
+                         "relationships.md": self._read(path, "relationships.md")}
+            else:
+                files = {"engine/rules.md": self._read(self.instructions, "rules.md"),
+                         "engine/skin_builder.md": self._read(self.instructions, "skin_builder.md"),
+                         "novel.md": self._read(path, "novel.md"),
+                         "state.md": self._read(path, "state.md"),
+                         "relationships.md": self._read(path, "relationships.md"),
+                         "timeline.md": self._read(path, "timeline.md")}
             for name in sorted(relevant):
                 files["characters/" + name + ".md"] = self._read(path, "characters/" + name + ".md")
                 files["knowledge/" + name + ".md"] = self._read(path, "knowledge/" + name + ".md")
             files["characters/pov.md"] = self._read(path, "characters/pov.md") \
                 if (path / "characters/pov.md").exists() else ""
-            files["knowledge/pov.md"] = self._read(path, "knowledge/pov.md")
-            recent = self._active(path)[-15 if kind == "audit" else -3:]
+            if kind != "canon":
+                files["knowledge/pov.md"] = self._read(path, "knowledge/pov.md")
+            recent = [] if kind == "canon" else self._active(path)[-15 if kind == "audit" else -3:]
             text = dump({"kind": kind, "reader_text": reader_text,
                          "audit_due": meta["audit_due"], "participants": sorted(relevant),
                          "files": files, "recent_scenes": recent})
@@ -542,6 +551,11 @@ class Engine:
                     raise EngineError("TIME_FORMAT", "Use compatible datetime offsets", 422)
             before_rel = self._read(path, "relationships.md")
             before_timeline = self._read(path, "timeline.md")
+            need(isinstance(data["relations"], list), "RELATION_CHANGES", "Relations must be a list")
+            for change in data["relations"]:
+                if isinstance(change, dict):
+                    need(change.get("source") in used, "UNLOADED_RELATION_OWNER",
+                         "Load the source character before changing their relationships")
             after_rel = dump(self._apply_relations(json.loads(before_rel), data["relations"], cast))
             files = {"state.md": dump(state), "relationships.md": after_rel}
             before = {"state.md": self._read(path, "state.md"),
@@ -669,11 +683,13 @@ class Engine:
                 elif name == "relationships.md":
                     validate_relations(json.loads(after), cast)
                 elif name.startswith("knowledge/"):
-                    need(after.startswith("# Новые знания:"), "KNOWLEDGE_FORMAT",
-                         "Keep personal-memory heading")
+                    need(after.startswith(current) and after != current,
+                         "AUDIT_APPEND_ONLY",
+                         "Audit must append knowledge corrections; it cannot erase prior facts")
                 elif name == "timeline.md":
-                    need(after.startswith("# Хронология"), "TIMELINE_FORMAT",
-                         "Keep timeline heading")
+                    need(after.startswith(current) and after != current,
+                         "AUDIT_APPEND_ONLY",
+                         "Audit must append timeline corrections; it cannot erase past events")
                 changes[name] = after
                 trail.append({"file": name, "reason": row["reason"],
                               "before": current, "after": after})
