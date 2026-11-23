@@ -112,7 +112,7 @@ def normalize(raw: dict, cast: set[str]) -> dict:
 
 
 def update(existing: dict, updates: list[dict], cast: set[str],
-           participants: set[str]) -> dict:
+           participants: set[str], narration: str = "") -> dict:
     """Apply only real changes. First acquaintance and initial metric are distinct.
 
     Runtime does not infer personal acquaintance, romance or other feelings.
@@ -131,8 +131,9 @@ def update(existing: dict, updates: list[dict], cast: set[str],
             check(set(item) == identity | {"status"},
                   "Familiarity change needs source/target/status/reason")
         else:
-            check(set(item) in (identity | {"metric", "value"},
-                                identity | {"metric", "value", "significant"}),
+            allowed = identity | {"metric", "value"}
+            check(allowed <= set(item) and
+                  set(item) <= allowed | {"significant", "evidence"},
                   "Feeling change needs source/target/metric/value/reason")
         src, dst = item["source"], item["target"]
         check(src in (cast | {"pov"}) and dst in (cast | {"pov"}) - {src},
@@ -199,6 +200,12 @@ def update(existing: dict, updates: list[dict], cast: set[str],
                     check(item.get("significant") is True and
                           len(item["reason"].strip()) >= 8,
                           "A jump larger than ±3 requires significant=true and an event reason")
+                    check("evidence" in item and
+                          isinstance(item["evidence"], str) and
+                          8 <= len(item["evidence"]) <= 260 and
+                          "\n" not in item["evidence"] and
+                          item["evidence"] in narration,
+                          "A jump larger than ±3 needs an exact excerpt from the saved scene")
             else:
                 check(len(row) < MAX_SCALES,
                       "NPC→POV cannot exceed 10 individual scales")
@@ -206,6 +213,12 @@ def update(existing: dict, updates: list[dict], cast: set[str],
                 check(not ("significant" in item and
                            type(item["significant"]) is not bool),
                       "significant must be boolean")
+            if "evidence" in item:
+                check(isinstance(item["evidence"], str) and
+                      len(item["evidence"]) >= 8 and
+                      len(item["evidence"]) <= 260 and
+                      item["evidence"] in narration,
+                      "Evidence must be a literal excerpt from the saved scene")
             row[label] = value
         else:
             text = _word(value, MAX_NPC_DESCRIPTION, "NPC→NPC description")
