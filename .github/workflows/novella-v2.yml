@@ -4,6 +4,7 @@ on:
     branches:
       - main
       - 'test/novella-v2-**'
+      - 'feature/v2-*'
     paths:
       - 'novella_v2/**'
       - '.github/workflows/novella-v2.yml'
