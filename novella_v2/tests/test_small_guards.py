@@ -194,6 +194,24 @@ class TestSmallGuards(unittest.TestCase):
         self.assertNotEqual(first["packet_id"], second["packet_id"])
         self.assertFalse(second["reused_pending_packet"])
 
+    def test_orphaned_packet_after_crash_is_recreated_not_reused_forever(self):
+        old = self.prepare()
+        atomic(self.root("system/packet.json"), "разбитый пакет после сбоя")
+        fresh = self.prepare()
+        self.assertNotEqual(fresh["packet_id"], old["packet_id"])
+        self.assertFalse(fresh["reused_pending_packet"])
+        part = self.engine.read_chunk(self.sid, fresh["packet_id"], 0)
+        self.assertEqual(part["packet_id"], fresh["packet_id"])
+        self.assertTrue(part["content"].startswith("{"))
+
+    def test_packet_tampered_after_last_chunk_cannot_be_committed(self):
+        packet = self.prepare()
+        self.finish(packet)
+        atomic(self.root("system/packet.json"), "изменено после чтения")
+        with self.assertRaisesRegex(EngineError, "Prepared context bytes changed"):
+            self.engine.commit(self.sid, self.payload(packet))
+        self.assertEqual(self.engine.status(self.sid)["turn"], 0)
+
     def test_packet_invalidated_by_external_knowledge_edit(self):
         first = self.prepare()
         knowledge = self.root("knowledge/adrian.md")
