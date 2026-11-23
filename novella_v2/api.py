@@ -68,7 +68,8 @@ def create(body: dict):
     return store.create(
         original=body["original"], blocks=body["blocks"],
         names=body["names"], genre_answers=body.get("genre_answers"),
-        relationships=body.get("relationships"))
+        relationships=body.get("relationships"),
+        initial_threads=body.get("initial_threads"))
 
 
 @app.get("/v2/novels/{sid}")
