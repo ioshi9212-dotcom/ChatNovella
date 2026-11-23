@@ -888,12 +888,11 @@ class Engine:
                  "STATE_UNLOADED", "All present/remote characters must be loaded")
             before_state = json.loads(self._read(path, "state.md"))
             validate_state(before_state, cast, meta["turn"])
-            # A loaded card is not proof that its owner witnessed this scene.
-            # Allow entering/leaving within one turn via a brief literal
-            # narrative witness receipt, without forcing end-state presence.
-            present_during_turn = (set(before_state["present"]) |
-                                   set(before_state["remote"]) |
-                                   set(state["present"]) | set(state["remote"]))
+            # A loaded card or presence in an earlier scene is NOT proof
+            # of witnessing this one: the new turn may jump in time/place.
+            # Anyone who left by the final state needs a literal witness
+            # receipt for their actual participation earlier in this turn.
+            present_during_turn = set(state["present"]) | set(state["remote"])
             access = data.get("scene_access", [])
             need(isinstance(access, list) and len(access) <= len(used),
                  "SCENE_ACCESS", "Scene access receipts must be short")
@@ -907,7 +906,7 @@ class Engine:
                      item["channel"] in {"physical", "remote", "ability"} and
                      isinstance(item["source"], str) and
                      8 <= len(item["source"]) <= 260 and
-                     "\\n" not in item["source"] and
+                     "\n" not in item["source"] and
                      item["source"] in data["narration"],
                      "SCENE_ACCESS", "Access must be supported by a direct scene excerpt")
                 access_ids.add(witness)
