@@ -227,7 +227,7 @@ def _archived_turn(path: Path, request_id: str) -> dict | None:
 # reading the full scene archive for the common case of a fresh request ID.
 # For a possible old repeat, search the authoritative archive and compare its
 # exact saved request hash. False positives cost a lookup, never data loss.
-RECENT_REQUESTS = 96
+RECENT_REQUESTS = 32
 REQUEST_FILTER_BYTES = 8192
 
 
