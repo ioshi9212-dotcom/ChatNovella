@@ -1,0 +1,264 @@
+"""Real JSON-RPC tests against temporary V2 data. Never touch Lite or /data."""
+from __future__ import annotations
+
+from copy import deepcopy
+from hashlib import sha256
+import json
+from pathlib import Path
+from tempfile import TemporaryDirectory
+import unittest
+from unittest.mock import patch
+
+from fastapi.testclient import TestClient
+
+import novella_v2.api as api
+from novella_v2.engine import Engine, empty_actor
+
+
+TOOLS = {
+    "load_v2_instructions", "get_v2_instruction_versions", "create_v2_novel",
+    "get_v2_status", "approve_v2_canon", "set_v2_opening", "add_v2_character",
+    "prepare_v2_context", "read_v2_chunk", "save_v2_turn", "finish_v2_audit",
+    "search_v2_history", "rollback_v2_turn",
+}
+
+
+def digest(text):
+    return sha256(text.encode("utf-8")).hexdigest()
+
+
+class TestV2MCP(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.token_patch = patch.object(api, "TOKEN", "temporary-mcp-test-only-" + "x" * 32)
+        cls.token_patch.start()
+        cls.client = TestClient(api.app)
+        cls.client.__enter__()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.client.__exit__(None, None, None)
+        cls.token_patch.stop()
+
+    def setUp(self):
+        self.tmp = TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.data = Path(self.tmp.name) / "data"
+        self.engine = Engine(self.data)
+        self.store_patch = patch.object(api, "store", self.engine)
+        self.store_patch.start()
+        self.addCleanup(self.store_patch.stop)
+        self.headers = {
+            "Authorization": "Bearer " + api.TOKEN,
+            "Accept": "application/json, text/event-stream",
+        }
+        self.serial = 0
+
+    def rpc(self, method, params=None, *, headers=None):
+        self.serial += 1
+        response = self.client.post("/mcp", headers=headers or self.headers, json={
+            "jsonrpc": "2.0", "id": self.serial, "method": method, "params": params or {},
+        })
+        self.assertEqual(response.status_code, 200, response.text)
+        value = response.json()
+        self.assertNotIn("error", value, value)
+        return value["result"]
+
+    def tool(self, tool_name, **arguments):
+        result = self.rpc("tools/call", {"name": tool_name, "arguments": arguments})
+        self.assertFalse(result.get("isError"), result)
+        return result["structuredContent"]
+
+    @staticmethod
+    def state(turn):
+        return {"turn": turn, "datetime": None, "location": "Тестовая библиотека",
+                "pov": empty_actor(), "present": {"adrian": empty_actor()},
+                "remote": {}, "objects": ["красная книга на столе"], "unfinished": []}
+
+    def create(self, long=False):
+        original = ("Мир: закрытая библиотека. Пропал ключ от шкафа.\n" +
+                    ("Описание тестовой библиотеки. " * 1600 if long else "") +
+                    "\nPOV: тестовая героиня.\nАдриан: тестовый библиотекарь.\n"
+                    "Сайлас: отсутствует и не слышит разговор.\n")
+        return self.tool("create_v2_novel", original=original, blocks=[
+            {"anchor": "Мир:", "target": "novel"},
+            {"anchor": "POV:", "target": "pov"},
+            {"anchor": "Адриан:", "target": "adrian"},
+            {"anchor": "Сайлас:", "target": "silas"},
+        ], names={"pov": "Героиня", "adrian": "Адриан", "silas": "Сайлас"},
+            relationships={"familiarity": {
+                "adrian": {"pov": "acquainted"}, "pov": {"adrian": "acquainted"}},
+                "npc_to_pov": {"adrian": {"доверие": 40}}, "npc_to_npc": {}},
+            initial_threads=[{"id": "missing_key", "title": "Пропавший ключ",
+                              "status": "not_started", "note": "Ключ ещё не найден",
+                              "source": "Пропал ключ от шкафа."}])
+
+    def read(self, sid, packet):
+        parts = []
+        for index in packet["unread_chunk_indices"]:
+            chunk = self.tool("read_v2_chunk", session_id=sid,
+                              packet_id=packet["packet_id"], index=index)
+            self.assertLessEqual(len(chunk["content"]), 36000)
+            self.assertEqual(digest(chunk["content"]), packet["chunk_hashes"][index])
+            self.assertEqual(chunk["sha256"], packet["chunk_hashes"][index])
+            parts.append(chunk["content"])
+        self.assertTrue(chunk["all_chunks_read"])
+        content = "".join(parts)
+        self.assertEqual(digest(content), packet["sha256"])
+        files = json.loads(content)["files"]
+        self.assertIn("relationships.md", files)
+        self.assertIn("open_threads.md", files)
+        self.assertNotIn("engine/rules.md", files)
+        self.assertNotIn("engine/skin_builder.md", files)
+        return files
+
+    def start(self, long=False):
+        created = self.create(long)
+        sid = created["session_id"]
+        self.assertTrue(sid.startswith("NV2_"))
+        canon = self.tool("prepare_v2_context", session_id=sid, reader_text="",
+                          participants=[], kind="canon", request_id="canon-preview")
+        if long:
+            self.assertGreater(canon["chunk_count"], 1)
+        files = self.read(sid, canon)
+        self.assertEqual(files["original.txt"], (self.data / sid / "original.txt").read_text())
+        approved = self.tool("approve_v2_canon", session_id=sid,
+                             expected_version=created["version"], canon_hash=created["canon_hash"],
+                             confirmation="Утверждаю полную синтетическую тестовую анкету")
+        self.tool("set_v2_opening", session_id=sid, expected_version=approved["version"],
+                  state=self.state(0))
+        return sid
+
+    def body(self, packet, number=1):
+        scene = ("Героиня наклонилась к Адриану и прошептала: «Ключ спрятан в красной книге». "
+                 "Адриан услышал её, протянул ей свой ключ и сказал: «Я доверяю тебе».")
+        return {"request_id": "mcp-turn-" + str(number), "expected_version": packet["version"],
+                "packet_id": packet["packet_id"], "chunk_hashes": packet["chunk_hashes"],
+                "reader_text": "Шепчу Адриану, где спрятан ключ.", "narration": scene,
+                "participants": ["adrian"], "state": self.state(number),
+                "knowledge": [{"owner": "adrian", "fact": "Ключ спрятан в красной книге",
+                               "source": "Ключ спрятан в красной книге"}],
+                "events": [{"text": "Героиня сообщила Адриану тайник ключа.",
+                            "participants": ["pov", "adrian"]}],
+                "relations": [{"source": "adrian", "target": "pov", "metric": "доверие",
+                               "value": 42, "reason": "Доверился после разговора",
+                               "evidence": "Я доверяю тебе"}],
+                "thread_updates": [{"id": "missing_key", "title": "Пропавший ключ",
+                                    "status": "active", "note": "Обнаружен тайник ключа",
+                                    "source": "Ключ спрятан в красной книге"}]}
+
+    def test_auth_transport_and_all_typed_tools(self):
+        message = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
+        self.assertEqual(self.client.post("/mcp", json=message).status_code, 401)
+        self.assertEqual(self.client.post("/mcp", json=message, headers={
+            "Authorization": "Bearer wrong"}).status_code, 401)
+        with patch.object(api, "TOKEN", ""):
+            self.assertEqual(self.client.post("/mcp", json=message).status_code, 503)
+        init = self.rpc("initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
+                                      "clientInfo": {"name": "V2 acceptance", "version": "1.0"}})
+        self.assertEqual(init["serverInfo"]["name"], "ChatNovella V2")
+        self.assertIn("once", init["instructions"])
+        tools = self.rpc("tools/list")["tools"]
+        self.assertEqual({t["name"] for t in tools}, TOOLS)
+        turn = next(t for t in tools if t["name"] == "save_v2_turn")["inputSchema"]
+        self.assertIn("State", turn["$defs"])
+        self.assertIn("Knowledge", turn["$defs"])
+        self.assertIn("ThreadUpdate", turn["$defs"])
+        self.assertEqual(set(turn["$defs"]["State"]["required"]), set(self.state(0)))
+        denied = self.rpc("tools/call", {"name": "get_v2_status", "arguments": {
+            "session_id": "LITE_78525c917cca4417a8723dca965813a0"}})
+        self.assertTrue(denied["isError"])
+        hostile = self.client.post("/mcp", json=message, headers={
+            **self.headers, "Host": "untrusted.example"})
+        self.assertEqual(hostile.status_code, 421)
+
+    def test_instructions_hashes_and_author_skin_unchanged(self):
+        instructions = self.tool("load_v2_instructions")
+        for name in ("rules", "skin_builder"):
+            self.assertEqual(instructions[name]["sha256"], digest(instructions[name]["content"]))
+        root = Path(__file__).resolve().parents[1]
+        self.assertEqual(instructions["skin_builder"]["content"], (root / "skin_builder.md").read_bytes().decode("utf-8"))
+        versions = self.tool("get_v2_instruction_versions")
+        self.assertEqual(versions["rules_sha256"], instructions["rules"]["sha256"])
+        self.assertNotIn("content", json.dumps(versions))
+
+    def test_end_to_end_chunks_memory_arcs_duplicate_restart_and_rollback(self):
+        sid = self.start(long=True)
+        prepared = self.tool("prepare_v2_context", session_id=sid,
+                             reader_text="Шепчу Адриану, где спрятан ключ.",
+                             participants=["adrian"], kind="turn", request_id="mcp-turn-1")
+        self.read(sid, prepared)
+        turn = self.body(prepared)
+        wrong = deepcopy(turn)
+        wrong["knowledge"][0]["owner"] = "silas"
+        rejected = self.rpc("tools/call", {"name": "save_v2_turn", "arguments": {
+            "session_id": sid, "turn": wrong}})
+        self.assertTrue(rejected["isError"])
+        self.assertIn("KNOWLEDGE_OWNER", rejected["content"][0]["text"])
+        self.assertEqual(self.engine.status(sid)["turn"], 0)
+        saved = self.tool("save_v2_turn", session_id=sid, turn=turn)
+        self.assertTrue(saved["saved"])
+        self.assertEqual(saved, self.tool("save_v2_turn", session_id=sid, turn=turn))
+        replay = self.tool("prepare_v2_context", session_id=sid,
+                           reader_text=turn["reader_text"], participants=["adrian"],
+                           kind="turn", request_id="mcp-turn-1")
+        self.assertTrue(replay["already_committed_duplicate"])
+        self.assertEqual(replay["narration"], saved["narration"])
+        history = self.tool("search_v2_history", session_id=sid, query="красной книге")
+        self.assertEqual(len(history["scenes"]), 1)
+        # Reopening the same temporary storage is local persistence validation,
+        # not a claim that an Amvera project has been restarted.
+        api.store = Engine(self.data)
+        status = self.tool("get_v2_status", session_id=sid)
+        self.assertEqual(status["turn"], 1)
+        next_packet = self.tool("prepare_v2_context", session_id=sid, reader_text="Проверка памяти",
+                                participants=["adrian", "silas"], kind="turn", request_id="mcp-inspect")
+        files = self.read(sid, next_packet)
+        self.assertIn("Ключ спрятан в красной книге", files["knowledge/adrian.md"])
+        self.assertNotIn("Ключ спрятан в красной книге", files["knowledge/silas.md"])
+        self.assertIn("тайник", files["open_threads.md"])
+        self.assertEqual(json.loads(files["relationships.md"])["npc_to_pov"]["adrian"]["доверие"], 42)
+        undone = self.tool("rollback_v2_turn", session_id=sid, expected_version=status["version"],
+                           request_id="mcp-turn-1", reason="Откат синтетической тестовой сцены")
+        self.assertEqual(undone["turn"], 0)
+        self.assertEqual(self.tool("search_v2_history", session_id=sid)["scenes"], [])
+        self.assertNotIn("Ключ спрятан в красной книге", (self.data / sid / "knowledge/adrian.md").read_text())
+        self.assertIn('"kind":"rollback"', (self.data / sid / "history.jsonl").read_text())
+        self.assertEqual(json.loads((self.data / sid / "relationships.md").read_text())["npc_to_pov"]["adrian"]["доверие"], 40)
+
+    def test_add_character_and_finish_required_audit(self):
+        sid = self.start()
+        status = self.engine.status(sid)
+        added = self.tool("add_v2_character", session_id=sid, expected_version=status["version"],
+                          name="marcus", display="Маркус", established_text="Маркус вошёл и назвался.")
+        self.assertGreater(added["version"], status["version"])
+        for number in range(1, 16):
+            packet = self.engine.prepare(sid, str(number), ["adrian"], "turn", f"audit-seed-{number}")
+            for index in packet["unread_chunk_indices"]:
+                self.engine.read_chunk(sid, packet["packet_id"], index)
+            self.engine.commit(sid, {
+                "request_id": f"audit-seed-{number}", "expected_version": packet["version"],
+                "packet_id": packet["packet_id"], "chunk_hashes": packet["chunk_hashes"],
+                "reader_text": str(number), "narration": f"Адриан перелистнул страницу {number}.",
+                "participants": ["adrian"], "state": self.state(number),
+                "knowledge": [], "events": [], "relations": [],
+            })
+        blocked = self.rpc("tools/call", {"name": "prepare_v2_context", "arguments": {
+            "session_id": sid, "reader_text": "Дальше", "participants": ["adrian"],
+            "kind": "turn", "request_id": "after-audit"}})
+        self.assertTrue(blocked["isError"])
+        self.assertIn("AUDIT_GATE", blocked["content"][0]["text"])
+        packet = self.tool("prepare_v2_context", session_id=sid, reader_text="",
+                           participants=[], kind="audit", request_id="audit-15")
+        self.read(sid, packet)
+        finished = self.tool("finish_v2_audit", session_id=sid, expected_version=packet["version"],
+                             packet_id=packet["packet_id"], chunk_hashes=packet["chunk_hashes"],
+                             report={key: "Сверено по полным сценам" for key in (
+                                 "continuity", "state", "knowledge", "timeline", "relationships")},
+                             corrections={})
+        self.assertTrue(finished["audited"])
+        self.assertEqual(self.tool("get_v2_status", session_id=sid)["audit_due"], 0)
+
+
+if __name__ == "__main__":
+    unittest.main()
