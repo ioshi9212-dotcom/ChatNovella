@@ -392,19 +392,23 @@ class TestV2Integrity(unittest.TestCase):
                             "reason": "Стереть историю"}})
 
     def test_audit_can_append_correction_with_fulldiff_archive(self):
+        first_packet, _ = self.packet()
+        self.engine.commit(self.sid, self.turn(
+            first_packet, narration="**Адриан** — Я услышал это."))
         data_path = self.path("system/meta.json")
         meta = json.loads(data_path.read_text(encoding="utf-8"))
         meta["turn"], meta["audit_due"] = 15, 15
         atomic(data_path, dump(meta))
         p, _ = self.packet(kind="audit")
         old = self.path("knowledge/adrian.md").read_text(encoding="utf-8")
-        new = old + "\nУточнение, подтверждённое исходной сценой.\n"
+        new = old + "\nУточнение, подтверждённое исходной сценой. [источник: Я услышал это.]\n"
         report = {key: "Проверено" for key in
                   ("continuity", "state", "knowledge", "timeline", "relationships")}
         result = self.engine.audit(
             self.sid, p["version"], p["packet_id"], p["chunk_hashes"], report,
             {"knowledge/adrian.md": {"before_sha256": digest(old), "after": new,
-                                      "reason": "Отмечено пропущенное знание"}})
+                                      "reason": "Отмечено пропущенное знание",
+                                      "evidence": "Я услышал это."}})
         self.assertEqual(result["corrections"], 1)
         self.assertEqual(self.path("knowledge/adrian.md").read_text(encoding="utf-8"), new)
         audit_record = json.loads(self.path("system/audit.jsonl").read_text(encoding="utf-8"))
