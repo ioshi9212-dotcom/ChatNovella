@@ -9,6 +9,7 @@ import base64
 from contextlib import contextmanager
 from copy import deepcopy
 from datetime import datetime
+from difflib import SequenceMatcher
 from hashlib import sha256
 import fcntl
 import json
@@ -185,6 +186,106 @@ def empty_state() -> dict:
 
 def chunks(value: str) -> list[str]:
     return [value[i:i + CHUNK_SIZE] for i in range(0, len(value), CHUNK_SIZE)] or [""]
+
+
+def _backward_history(path: Path):
+    """Yield archive JSONL rows newest first without loading the whole archive."""
+    with path.open("rb") as handle:
+        cursor = handle.seek(0, os.SEEK_END)
+        remainder = b""
+        while cursor:
+            size = min(16_384, cursor)
+            cursor -= size
+            handle.seek(cursor)
+            pieces = (handle.read(size) + remainder).split(b"\n")
+            remainder = pieces[0]
+            for line in reversed(pieces[1:]):
+                if line.strip():
+                    yield json.loads(line.decode("utf-8"))
+        if remainder.strip():
+            yield json.loads(remainder.decode("utf-8"))
+
+
+def _recent_turns(path: Path, count: int) -> list[dict]:
+    """Read only enough archive tail rows for the latest active turns."""
+    result: list[dict] = []
+    reverted: set[str] = set()
+    for row in _backward_history(path / "history.jsonl"):
+        if row["kind"] == "rollback":
+            reverted.add(row["reverts"])
+        elif row["kind"] == "turn":
+            if row["request_id"] in reverted:
+                reverted.remove(row["request_id"])
+            else:
+                result.append(row)
+                if len(result) == count:
+                    break
+    return list(reversed(result))
+
+
+def _archived_turn(path: Path, request_id: str) -> dict | None:
+    """A receipt points into the immutable archive; search from its newest end."""
+    reverted: set[str] = set()
+    for row in _backward_history(path / "history.jsonl"):
+        if row["kind"] == "rollback":
+            reverted.add(row["reverts"])
+        elif row["kind"] == "turn":
+            if row["request_id"] == request_id:
+                return None if request_id in reverted else row
+    return None
+
+
+def _append_descriptor(path: Path, text: str) -> dict:
+    """Commit an append by size+tail fingerprint, not by copying all old turns."""
+    data = text.encode("utf-8")
+    with path.open("rb") as handle:
+        size = handle.seek(0, os.SEEK_END)
+        tail_size = min(2048, size)
+        handle.seek(size - tail_size)
+        tail_sha = sha256(handle.read(tail_size)).hexdigest()
+    return {"size": size, "tail_sha": tail_sha,
+            "text": base64.b64encode(data).decode("ascii")}
+
+
+def _apply_append(path: Path, entry: dict) -> None:
+    """Crash-safe, replayable append. A partially written tail is repaired once."""
+    expected = entry["size"]
+    raw = base64.b64decode(entry["text"])
+    with path.open("r+b") as handle:
+        size = handle.seek(0, os.SEEK_END)
+        need(expected <= size <= expected + len(raw), "ARCHIVE_DIVERGED",
+             "Archive size changed outside this transaction")
+        tail_size = min(2048, expected)
+        handle.seek(expected - tail_size)
+        need(sha256(handle.read(tail_size)).hexdigest() == entry["tail_sha"],
+             "ARCHIVE_CORRUPTED", "Archive prefix changed; refusing append")
+        if size == expected + len(raw):
+            handle.seek(expected)
+            need(handle.read(len(raw)) == raw, "ARCHIVE_DIVERGED",
+                 "Archive tail does not match the pending transaction")
+            return
+        handle.truncate(expected)
+        handle.seek(expected)
+        handle.write(raw)
+        handle.flush()
+        os.fsync(handle.fileno())
+
+
+def _near_duplicate(scene: str, older: list[dict]) -> bool:
+    """Cheap warning only. Short recurring dialogue is never a hard error."""
+    if len(scene) < 180 or len(scene.split()) < 20:
+        return False
+    current = scene.split()
+    for row in older[-3:]:
+        previous = row.get("narration", "")
+        if len(previous) < 180 or abs(len(previous) - len(scene)) > len(scene) // 10:
+            continue
+        if previous == scene:
+            return True
+        if SequenceMatcher(None, current[:500], previous.split()[:500],
+                           autojunk=True).ratio() >= 0.97:
+            return True
+    return False
 
 
 class Engine:
