@@ -106,13 +106,19 @@ class TestLongStory(unittest.TestCase):
                 relations = []
                 if n == 20:
                     relations.append({"source": "adrian", "target": "pov",
+                                      "status": "acquainted", "reason": "Встретились"})
+                    relations.append({"source": "adrian", "target": "pov",
                                       "metric": "доверие", "value": 35,
                                       "reason": "Поговорили"})
                 if n == 45:
                     relations.append({"source": "silas", "target": "pov",
+                                      "status": "acquainted", "reason": "Встретились"})
+                    relations.append({"source": "silas", "target": "pov",
                                       "metric": "симпатия", "value": 12,
                                       "reason": "Встреча"})
                 if n == 65:
+                    relations.append({"source": "marcus", "target": "pov",
+                                      "status": "acquainted", "reason": "Знакомство"})
                     relations.append({"source": "marcus", "target": "pov",
                                       "metric": "интерес", "value": 15,
                                       "reason": "Знакомство"})
