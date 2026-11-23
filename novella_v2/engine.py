@@ -1106,10 +1106,27 @@ class Engine:
                     need(after.startswith(current) and after != current,
                          "AUDIT_APPEND_ONLY",
                          "Audit must append knowledge corrections; it cannot erase prior facts")
+                    quote = row.get("evidence")
+                    owner = name[len("knowledge/"):-3]
+                    need(isinstance(quote, str) and
+                         8 <= len(quote) <= 260 and
+                         quote in after[len(current):] and
+                         any(quote in scene["narration"] and
+                             (owner == "pov" or owner in scene["participants"])
+                             for scene in archived),
+                         "AUDIT_KNOWLEDGE_EVIDENCE",
+                         "Appended personal knowledge needs an exact witnessed scene quote")
                 elif name == "timeline.md":
                     need(after.startswith(current) and after != current,
                          "AUDIT_APPEND_ONLY",
                          "Audit must append timeline corrections; it cannot erase past events")
+                    quote = row.get("evidence")
+                    need(isinstance(quote, str) and
+                         8 <= len(quote) <= 260 and
+                         quote in after[len(current):] and
+                         any(quote in scene["narration"] for scene in archived),
+                         "AUDIT_TIMELINE_EVIDENCE",
+                         "Appended timeline correction needs an exact scene quote")
                 changes[name] = after
                 trail.append({"file": name, "reason": row["reason"],
                               "before": current, "after": after})
