@@ -305,6 +305,31 @@ class Engine:
         # read_text() normalizes CRLF: original author bytes must remain literal.
         return (path / name).read_bytes().decode("utf-8")
 
+    def load_instructions(self) -> dict:
+        """Full instruction text: fetch once per conversation or on explicit refresh.
+
+        This does not persist ChatGPT's chat memory. The client retains the
+        returned text in its current conversation context.
+        """
+        rules = self._read(self.instructions, "rules.md")
+        skin = self._read(self.instructions, "skin_builder.md")
+        return {
+            "rules": {"content": rules, "sha256": digest(rules),
+                      "chars": len(rules)},
+            "skin_builder": {"content": skin, "sha256": digest(skin),
+                             "chars": len(skin), "empty": not bool(skin.strip())},
+            "refresh_policy": "manual_per_chat",
+        }
+
+    def instruction_versions(self) -> dict:
+        """Small explicit version check; full texts are never read in a turn."""
+        data = self.load_instructions()
+        return {
+            "rules_sha256": data["rules"]["sha256"],
+            "skin_builder_sha256": data["skin_builder"]["sha256"],
+            "skin_builder_empty": data["skin_builder"]["empty"],
+        }
+
     @staticmethod
     def _cast(path: Path) -> set[str]:
         return {p.stem for p in (path / "characters").glob("*.md")
@@ -524,8 +549,7 @@ class Engine:
         return active
 
     @staticmethod
-    def _source_signature(path: Path, relevant: set[str], kind: str,
-                          instructions: Path) -> list[list]:
+    def _source_signature(path: Path, relevant: set[str], kind: str) -> list[list]:
         names = ["novel.md", "state.md", "relationships.md", "timeline.md"]
         if kind == "canon":
             names.append("original.txt")
@@ -534,9 +558,9 @@ class Engine:
         names.append("knowledge/pov.md")
         if (path / "characters/pov.md").exists():
             names.append("characters/pov.md")
+        # Rules and Skin Builder belong to the chat-scoped instruction read,
+        # never to a gameplay packet. A remote edit must not force re-reading.
         sources = [path / name for name in names]
-        if kind != "canon":
-            sources += [instructions / "rules.md", instructions / "skin_builder.md"]
         return [[str(p), p.stat().st_size, p.stat().st_mtime_ns] for p in sources]
 
     @staticmethod
@@ -604,7 +628,7 @@ class Engine:
                 if meta["audit_due"] == 60:
                     relevant = cast
             need(relevant <= cast, "UNKNOWN_CHARACTER", "Character not registered in novel")
-            signature = self._source_signature(path, relevant, kind, self.instructions)
+            signature = self._source_signature(path, relevant, kind)
             pending = meta.get("packet")
             if (pending and pending["version"] == meta["version"] and
                 pending["kind"] == kind and pending["reader_text"] == reader_text and
@@ -620,9 +644,7 @@ class Engine:
                 need(digest(files["original.txt"]) == meta["original_hash"],
                      "ORIGINAL_CORRUPTED", "Author's original source no longer matches")
             else:
-                files = {"engine/rules.md": self._read(self.instructions, "rules.md"),
-                         "engine/skin_builder.md": self._read(self.instructions, "skin_builder.md"),
-                         "novel.md": self._read(path, "novel.md"),
+                files = {"novel.md": self._read(path, "novel.md"),
                          "state.md": self._read(path, "state.md"),
                          "relationships.md": self._read(path, "relationships.md"),
                          "timeline.md": self._read(path, "timeline.md")}
@@ -646,6 +668,7 @@ class Engine:
             recent = [] if kind == "canon" else _recent_turns(path, 15 if kind == "audit" else 3)
             payload = dump({"kind": kind, "reader_text": reader_text,
                             "audit_due": meta["audit_due"], "participants": sorted(relevant),
+                            "instructions_mode": "loaded_once_per_chat",
                             "files": files, "recent_scenes": recent})
             content_chunks = chunks(payload)
             offsets = []
@@ -760,7 +783,7 @@ class Engine:
                  "Prepared request ID and committed request ID differ")
             need(packet.get("source_signature") ==
                  self._source_signature(path, set(packet["participants"]),
-                                        "turn", self.instructions),
+                                        "turn"),
                  "SOURCE_CHANGED", "A file changed after preparing the context")
             need(packet["reader_text"] == data["reader_text"],
                  "INPUT_MISMATCH", "Prepared and committed reader text differ")
