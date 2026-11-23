@@ -789,7 +789,8 @@ class Engine:
             need(isinstance(data["relations"], list), "RELATION_CHANGES", "Relations must be a list")
             for change in data["relations"]:
                 if isinstance(change, dict):
-                    need(change.get("source") in used, "UNLOADED_RELATION_OWNER",
+                    need(change.get("source") == "pov" or change.get("source") in used,
+                         "UNLOADED_RELATION_OWNER",
                          "Load the source character before changing their relationships")
             after_rel = dump(self._apply_relations(
                 json.loads(before_rel), data["relations"], cast, set(used)))
