@@ -1,9 +1,12 @@
 import asyncio
+from concurrent.futures import ThreadPoolExecutor, wait
+import fcntl
 import json
 import os
 from pathlib import Path
 import sys
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 from fastapi.testclient import TestClient
@@ -39,6 +42,7 @@ class TransportTests(unittest.TestCase):
             self.assertTrue(r.json()['saved'])
             self.assertEqual(r.json()['narration'],d['narration'])
             self.assertEqual(c.post(f'/sessions/{sid}/turns',json=d).json(),r.json())
+            saved=r.json()
             self.assertEqual(c.get('/sessions/CN_legacy').status_code,409)
             schema=c.get('/openapi.json').json()
             self.assertIn('Turn',schema['components']['schemas'])
@@ -46,6 +50,11 @@ class TransportTests(unittest.TestCase):
             h={'accept':'application/json, text/event-stream'}
             r=c.post('/mcp',headers=h,json={'jsonrpc':'2.0','id':1,'method':'initialize','params':{'protocolVersion':'2025-03-26','capabilities':{},'clientInfo':{'name':'test','version':'1'}}})
             self.assertEqual(r.status_code,200,r.text)
+            retry=c.post('/mcp',headers=h,json={
+                'jsonrpc':'2.0','id':3,'method':'tools/call',
+                'params':{'name':'save_lite_turn','arguments':{'session_id':sid,'turn':d}}})
+            self.assertEqual(retry.status_code,200,retry.text)
+            self.assertEqual(retry.json()['result']['structuredContent'],saved)
             r=c.post('/mcp',headers=h,json={'jsonrpc':'2.0','id':2,'method':'tools/list','params':{}})
             self.assertEqual(r.status_code,200,r.text)
             names={t['name'] for t in r.json()['result']['tools']}
@@ -58,6 +67,38 @@ class TransportTests(unittest.TestCase):
             self.assertEqual(c.get('/sessions',headers={'authorization':'Bearer '+'x'*32}).status_code,200)
             self.assertEqual(c.get('/healthz').status_code,200)
             self.assertEqual(c.post('/sessions',headers={'authorization':'Bearer '+'x'*32},json={}).status_code,422)
+    def test_waiting_mcp_file_lock_keeps_health_and_discovery_responsive(self):
+        session=self.server.store.create('Канон.','Канон.',REG,relations(),state())
+        sid=session['session_id']
+        status=self.server.store.status
+        entered=threading.Event()
+        def observed_status(session_id):
+            entered.set()
+            return status(session_id)
+        headers={'accept':'application/json, text/event-stream'}
+        with TestClient(self.server.app) as c,patch.object(self.server.store,'status',side_effect=observed_status),ThreadPoolExecutor(max_workers=3) as pool:
+            fd=os.open(self.server.store.path(sid),os.O_RDONLY | os.O_DIRECTORY)
+            fcntl.flock(fd,fcntl.LOCK_EX)
+            try:
+                pending=pool.submit(c.post,'/mcp',headers=headers,json={
+                    'jsonrpc':'2.0','id':1,'method':'tools/call',
+                    'params':{'name':'get_lite_status','arguments':{'session_id':sid}}})
+                self.assertTrue(entered.wait(5),'MCP status call did not start')
+                health=pool.submit(c.get,'/healthz')
+                discovery=pool.submit(c.post,'/mcp',headers=headers,json={
+                    'jsonrpc':'2.0','id':2,'method':'tools/list','params':{}})
+                done,_=wait((health,discovery),timeout=1)
+                responsive=len(done)==2
+                self.assertFalse(pending.done(),'Status must wait for the session lock')
+            finally:
+                fcntl.flock(fd,fcntl.LOCK_UN)
+                os.close(fd)
+            result=pending.result(timeout=5)
+            self.assertEqual(result.status_code,200,result.text)
+            self.assertFalse(result.json()['result'].get('isError',False),result.text)
+            self.assertEqual(health.result(timeout=5).status_code,200)
+            self.assertEqual(discovery.result(timeout=5).status_code,200)
+            self.assertTrue(responsive,'A waiting MCP file lock blocked health and tool discovery')
     def test_mcp_denies_untrusted_origin(self):
         with TestClient(self.server.app) as c:
             r=c.post('/mcp',headers={'origin':'https://untrusted.example','accept':'application/json, text/event-stream'},json={'jsonrpc':'2.0','id':1,'method':'tools/list','params':{}})

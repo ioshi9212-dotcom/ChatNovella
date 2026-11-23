@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
+from starlette.concurrency import run_in_threadpool
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import Field
@@ -29,60 +30,62 @@ mcp=FastMCP('ChatNovella Lite',instructions=(BASE/'docs/lite/INSTRUCTIONS.md').r
                 allowed_origins=['https://'+HOST,'https://chatgpt.com','http://localhost:*','http://127.0.0.1:*']))
 
 # The same typed calls are exposed to MCP and Actions; no plans/review gate.
+# FastMCP runs synchronous tools on the event loop. Keep blocking file I/O and
+# session-lock waits in the same worker pool used by synchronous Actions routes.
 @mcp.tool()
-def list_lite_sessions() -> list[dict[str,Any]]:
+async def list_lite_sessions() -> list[dict[str,Any]]:
     """List only Lite sessions in this test service."""
-    return store.list_sessions()
+    return await run_in_threadpool(store.list_sessions)
 
 @mcp.tool()
-def create_lite_session(original_text:str,novel_text:str,registry:dict[str,str],relationships:Relationships,state:State) -> dict[str,Any]:
+async def create_lite_session(original_text:str,novel_text:str,registry:dict[str,str],relationships:Relationships,state:State) -> dict[str,Any]:
     """Create proposed setup. Do not activate or write a first scene. Preserve original verbatim."""
-    return store.create(original_text,novel_text,registry,relationships.model_dump(),state.model_dump())
+    return await run_in_threadpool(store.create,original_text,novel_text,registry,relationships.model_dump(),state.model_dump())
 
 @mcp.tool()
-def get_lite_status(session_id:str) -> dict[str,Any]:
+async def get_lite_status(session_id:str) -> dict[str,Any]:
     """Return exact version, canon checksum, stable IDs and due audits."""
-    return store.status(session_id)
+    return await run_in_threadpool(store.status,session_id)
 
 @mcp.tool()
-def approve_lite_canon(session_id:str,expected_version:int,canon_hash:str,reader_confirmation:str,approved_changes:str='') -> dict[str,Any]:
+async def approve_lite_canon(session_id:str,expected_version:int,canon_hash:str,reader_confirmation:str,approved_changes:str='') -> dict[str,Any]:
     """Only after explicit reader approval of full proposed canon and starting metrics. This does not start play."""
-    return store.approve(session_id,expected_version,canon_hash,reader_confirmation,approved_changes)
+    return await run_in_threadpool(store.approve,session_id,expected_version,canon_hash,reader_confirmation,approved_changes)
 
 @mcp.tool()
-def amend_lite_canon(session_id:str,expected_version:int,novel_text:str,reader_confirmation:str,reason:str,registry_additions:dict[str,str]|None=None) -> dict[str,Any]:
+async def amend_lite_canon(session_id:str,expected_version:int,novel_text:str,reader_confirmation:str,reason:str,registry_additions:dict[str,str]|None=None) -> dict[str,Any]:
     """Only reader-authorized canon amendment; preserve previous canon in operation archive."""
-    return store.amend_canon(session_id,expected_version,novel_text,reader_confirmation,reason,registry_additions)
+    return await run_in_threadpool(store.amend_canon,session_id,expected_version,novel_text,reader_confirmation,reason,registry_additions)
 
 @mcp.tool()
-def prepare_lite_context(session_id:str,reader_text:str,participants:list[str],kind:str='turn') -> dict[str,Any]:
+async def prepare_lite_context(session_id:str,reader_text:str,participants:list[str],kind:str='turn') -> dict[str,Any]:
     """Prepare a fresh full context every turn, including current full Skin Builder, canon, state, relations, timeline and 3 scenes. Past scenes are facts and continuity only, not style or direction. kind=canon for setup; kind=audit at checkpoints. Load entering NPC IDs before writing."""
-    return store.prepare(session_id,reader_text,participants,kind)
+    return await run_in_threadpool(store.prepare,session_id,reader_text,participants,kind)
 
 @mcp.tool()
-def read_lite_chunk(session_id:str,packet_id:str,index:int) -> dict[str,Any]:
+async def read_lite_chunk(session_id:str,packet_id:str,index:int) -> dict[str,Any]:
     """Read zero-based lossless chunk; verify SHA256 and read all chunks."""
-    return store.read_chunk(session_id,packet_id,index)
+    return await run_in_threadpool(store.read_chunk,session_id,packet_id,index)
 
 @mcp.tool()
-def save_lite_turn(session_id:str,turn:Turn) -> dict[str,Any]:
+async def save_lite_turn(session_id:str,turn:Turn) -> dict[str,Any]:
     """Write directly by the current Skin Builder, not past scenes; no additional repeated full style reviews. Atomically persist scene, per-ID POV/NPC knowledge, and important world milestones. Turn requires knowledge_review for POV and every participant/knowledge owner, plus significance and significance_reason for each event. Publish narration only after saved=true. Reuse request_id on retry."""
-    return store.commit(session_id,**turn.model_dump())
+    return await run_in_threadpool(store.commit,session_id,**turn.model_dump())
 
 @mcp.tool()
-def finish_lite_audit(session_id:str,expected_version:int,packet_id:str,chunk_hashes:list[str],report:dict[str,str],corrections:dict[str,dict[str,str]]) -> dict[str,Any]:
+async def finish_lite_audit(session_id:str,expected_version:int,packet_id:str,chunk_hashes:list[str],report:dict[str,str],corrections:dict[str,dict[str,str]]) -> dict[str,Any]:
     """After reading audit chunks, submit exact source quotations per domain and justified corrections. No canon/history rewrites."""
-    return store.finish_audit(session_id,expected_version,packet_id,chunk_hashes,report,corrections)
+    return await run_in_threadpool(store.finish_audit,session_id,expected_version,packet_id,chunk_hashes,report,corrections)
 
 @mcp.tool()
-def rollback_lite_turn(session_id:str,expected_version:int,request_id:str,reason:str) -> dict[str,Any]:
+async def rollback_lite_turn(session_id:str,expected_version:int,request_id:str,reason:str) -> dict[str,Any]:
     """On reader request revert exact last turn and affected data. Preserve original scene in append-only history."""
-    return store.rollback(session_id,expected_version,request_id,reason)
+    return await run_in_threadpool(store.rollback,session_id,expected_version,request_id,reason)
 
 @mcp.tool()
-def search_lite_history(session_id:str,start:int=1,end:int|None=None,query:str='') -> dict[str,Any]:
+async def search_lite_history(session_id:str,start:int=1,end:int|None=None,query:str='') -> dict[str,Any]:
     """Retrieve complete active scenes by turn or exact text; result uses read_lite_chunk for large archives."""
-    return store.read_history(session_id,start,end,query)
+    return await run_in_threadpool(store.read_history,session_id,start,end,query)
 
 mcp_app=mcp.streamable_http_app()
 @asynccontextmanager
@@ -182,9 +185,9 @@ class Setup(Model):
     state:State
 
 @mcp.tool()
-def update_lite_setup(session_id:str,expected_version:int,novel_text:str,relationships:Relationships,state:State) -> dict[str,Any]:
+async def update_lite_setup(session_id:str,expected_version:int,novel_text:str,relationships:Relationships,state:State) -> dict[str,Any]:
     """Edit unapproved setup after reader corrections. Original and permanent registry remain intact."""
-    return store.update_setup(session_id,expected_version,novel_text,relationships.model_dump(),state.model_dump())
+    return await run_in_threadpool(store.update_setup,session_id,expected_version,novel_text,relationships.model_dump(),state.model_dump())
 
 # Register Actions routes before the root MCP mount.
 @app.post('/sessions/{session_id}/setup',operation_id='updateLiteSetup')
