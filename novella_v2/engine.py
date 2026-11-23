@@ -148,6 +148,8 @@ def validate_relations(value: Any, characters: set[str]) -> dict:
     need(isinstance(value, dict) and set(value) == {"npc_to_pov", "npc_to_npc"},
          "RELATION_FIELDS", "Relations require only npc_to_pov and npc_to_npc")
     result = deepcopy(value)
+    need(isinstance(result["npc_to_pov"], dict) and isinstance(result["npc_to_npc"], dict),
+         "RELATION_FIELDS", "Relationship sections must be mappings")
     for source, dimensions in result["npc_to_pov"].items():
         need(source in characters and isinstance(dimensions, dict), "RELATION_OWNER",
              "Unknown relationship owner")
@@ -197,7 +199,8 @@ class Engine:
 
     @staticmethod
     def _cast(path: Path) -> set[str]:
-        return {p.stem for p in (path / "characters").glob("*.md") if IDENT.fullmatch(p.stem)}
+        return {p.stem for p in (path / "characters").glob("*.md")
+                if p.stem != "pov" and IDENT.fullmatch(p.stem)}
 
     def _recover(self, path: Path, meta: dict) -> dict:
         pending = meta.get("pending")
@@ -246,10 +249,11 @@ class Engine:
         need(isinstance(names, dict) and all(isinstance(v, str) and v.strip()
              for v in names.values()), "CAST_NAMES", "Character display names required")
         for name in names:
-            slug(name)
+            if name != "pov":
+                slug(name)
         need(isinstance(blocks, list) and bool(blocks), "SOURCE_BLOCKS",
              "Exact source offsets are required")
-        partitions: dict[str, list[str]] = {"novel": []}
+        partitions: dict[str, list[str]] = {"novel": [], "pov": []}
         for name in names:
             partitions[name] = []
         position = 0
@@ -276,7 +280,7 @@ class Engine:
         novel = NOVEL_RULE + "\n## Авторская анкета (дословные фрагменты)\n" + \
                 "".join(partitions["novel"]) + "\n" + cast_text + extra
         candidate_relations = validate_relations(
-            relationships or {"npc_to_pov": {}, "npc_to_npc": {}}, set(names))
+            relationships or {"npc_to_pov": {}, "npc_to_npc": {}}, set(names) - {"pov"})
         sid = "NV2_" + secrets.token_hex(12)
         tmp = Path(tempfile.mkdtemp(prefix=".new-", dir=self.root))
         try:
@@ -285,7 +289,7 @@ class Engine:
                      "state.md": dump(empty_state()),
                      "timeline.md": "# Хронология\n",
                      "history.jsonl": "", "system/audit.jsonl": ""}
-            for name in names:
+            for name in set(names) | ({"pov"} if partitions["pov"] else set()):
                 files["characters/" + name + ".md"] = CHARACTER_RULE + "".join(partitions[name])
                 files["knowledge/" + name + ".md"] = "# Новые знания: " + name + "\n"
             files["knowledge/pov.md"] = "# Новые знания: pov\n"
@@ -344,7 +348,14 @@ class Engine:
             self._version(meta, expected_version)
             need(meta["approved"], "NOT_APPROVED", "Approve novel before play")
             need(name not in self._cast(path), "CHARACTER_EXISTS", "This character already exists")
-            novel = self._read(path, "novel.md") + "\n- " + name + " — " + display.strip() + "\n"
+            novel = self._read(path, "novel.md")
+            heading = "## Персонажи (постоянные имена файлов)\n"
+            pos = novel.find(heading)
+            need(pos >= 0, "CAST_HEADING", "Main novel must contain the cast list")
+            boundary = novel.find("\n## ", pos + len(heading))
+            insert_at = len(novel) if boundary < 0 else boundary
+            novel = (novel[:insert_at].rstrip("\n") + "\n- " + name + " — " +
+                     display.strip() + "\n" + novel[insert_at:])
             files = {"novel.md": novel, "characters/" + name + ".md":
                      CHARACTER_RULE + established_text,
                      "knowledge/" + name + ".md": "# Новые знания: " + name + "\n"}
@@ -528,7 +539,9 @@ class Engine:
                     current = self._read(path, filename)
                     before[filename] = current
                 marker = "- " + fact.strip() + " [источник: " + source.strip() + "]"
-                need(marker not in current, "KNOWLEDGE_DUPLICATE", "Exact knowledge already recorded")
+                need(not any(row.startswith("- " + fact.strip() + " [источник:")
+                             for row in current.splitlines()),
+                     "KNOWLEDGE_DUPLICATE", "Fact already recorded for this character")
                 files[filename] = current + "\nХод " + str(meta["turn"] + 1) + \
                                   " · " + str(state["datetime"] or "дата не задана") + \
                                   "\n" + marker + "\n"
