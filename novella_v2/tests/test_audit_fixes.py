@@ -166,7 +166,7 @@ class AuditFixes(unittest.TestCase):
     def test_external_relationship_file_mutation_is_detected(self):
         path = self.filepath("relationships.md")
         file_content = json.loads(path.read_text(encoding="utf-8"))
-        file_content["familiarity"]["adrian"] = {"pov": "aware"}
+        file_content["familiarity"].setdefault("adrian", {})["pov"] = "aware"
         atomic(path, dump(file_content))
         with self.assertRaisesRegex(EngineError, "outside an authorized transaction"):
             self.packet("Проверим защиту")
