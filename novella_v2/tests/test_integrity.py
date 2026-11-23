@@ -303,6 +303,38 @@ class TestV2Integrity(unittest.TestCase):
             self.engine.commit(self.sid, duplicate)
         self.assertEqual(len(self.engine.history(self.sid)), 1)
 
+    def _prepare_real_audit_with_one_saved_fact(self):
+        for n in range(1, 16):
+            text = "реальный ход " + str(n)
+            p, _ = self.packet(text)
+            knowledge = ([{"owner": "adrian", "fact": "Узнал важный факт",
+                           "source": "Я услышал это."}] if n == 1 else [])
+            events = ([{"text": "Началась важная встреча.",
+                        "participants": ["pov", "adrian"]}] if n == 1 else [])
+            self.engine.commit(self.sid, self.turn(
+                p, n=n, reader=text, knowledge=knowledge, events=events))
+        self.assertEqual(self.engine.status(self.sid)["audit_due"], 15)
+        p, _ = self.packet(kind="audit")
+        report = {key: "Проверено по сценам" for key in
+                  ("continuity", "state", "knowledge", "timeline", "relationships")}
+        return p, report
+
+    def test_audit_detects_lost_personal_fact_in_real_history(self):
+        p, report = self._prepare_real_audit_with_one_saved_fact()
+        atomic(self.path("knowledge/adrian.md"), "# Новые знания: adrian\n")
+        with self.assertRaisesRegex(EngineError, "previously saved personal fact"):
+            self.engine.audit(self.sid, p["version"], p["packet_id"],
+                              p["chunk_hashes"], report)
+        self.assertEqual(self.engine.status(self.sid)["audit_due"], 15)
+
+    def test_audit_detects_lost_world_event_in_real_history(self):
+        p, report = self._prepare_real_audit_with_one_saved_fact()
+        atomic(self.path("timeline.md"), "# Хронология\n")
+        with self.assertRaisesRegex(EngineError, "previously saved world event"):
+            self.engine.audit(self.sid, p["version"], p["packet_id"],
+                              p["chunk_hashes"], report)
+        self.assertEqual(self.engine.status(self.sid)["audit_due"], 15)
+
     def test_audit_cannot_erase_knowledge_or_timeline(self):
         data_path = self.path("system/meta.json")
         meta = json.loads(data_path.read_text(encoding="utf-8"))
