@@ -523,12 +523,59 @@ class Engine:
                 active.pop()
         return active
 
+    @staticmethod
+    def _source_signature(path: Path, relevant: set[str], kind: str,
+                          instructions: Path) -> list[list]:
+        names = ["novel.md", "state.md", "relationships.md", "timeline.md"]
+        if kind == "canon":
+            names.append("original.txt")
+        for name in sorted(relevant):
+            names.extend(("characters/" + name + ".md", "knowledge/" + name + ".md"))
+        names.append("knowledge/pov.md")
+        if (path / "characters/pov.md").exists():
+            names.append("characters/pov.md")
+        sources = [path / name for name in names]
+        if kind != "canon":
+            sources += [instructions / "rules.md", instructions / "skin_builder.md"]
+        return [[str(p), p.stat().st_size, p.stat().st_mtime_ns] for p in sources]
+
+    @staticmethod
+    def _manifest(packet: dict, audit_due: int, reused: bool = False) -> dict:
+        count = len(packet["hashes"])
+        read = set(packet["received"])
+        unread = [i for i in range(count) if i not in read]
+        return {"packet_id": packet["id"], "version": packet["version"],
+                "chunk_count": count, "chunk_size": CHUNK_SIZE,
+                "chunk_hashes": packet["hashes"], "sha256": packet["sha256"],
+                "participants": packet["participants"], "audit_due": audit_due,
+                "request_id": packet.get("request_id"),
+                "reused_pending_packet": reused,
+                "unread_chunk_indices": unread,
+                "next_chunk_index": unread[0] if unread else None,
+                "all_chunks_read": not unread,
+                "first_chunk_included": False}
+
     def prepare(self, sid: str, reader_text: str = "",
                 participants: list[str] | None = None, kind: str = "turn",
                 request_id: str | None = None) -> dict:
         need(kind in ("turn", "audit", "canon"), "CONTEXT_KIND", "Unsupported context kind")
         need(isinstance(reader_text, str), "INPUT_TEXT", "Reader input must be text")
+        need(request_id is None or (isinstance(request_id, str) and
+             1 <= len(request_id) <= 100), "REQUEST_ID", "Invalid request id")
         with self._locked(sid) as (path, meta):
+            if kind == "turn" and request_id is not None and request_id in meta["requests"]:
+                receipt = meta["requests"][request_id]
+                need(not receipt.get("reverted"), "REQUEST_REUSED",
+                     "This operation was rolled back; choose a fresh request id")
+                old = _archived_turn(path, request_id)
+                need(old is not None, "HISTORY_INTEGRITY",
+                     "Committed request is missing from the scene archive")
+                need(old["reader_text"] == reader_text, "REQUEST_REUSED",
+                     "Request id cannot be reused for different reader input")
+                return {"already_committed_duplicate": True, "saved": True,
+                        "request_id": request_id, "version": meta["version"],
+                        "turn": old["turn"], "narration": old["narration"],
+                        "instruction": "Return the saved scene. Do not prepare or generate another."}
             if kind != "canon":
                 need(meta["approved"], "NOT_APPROVED", "Confirm canon before writing")
                 need((kind == "audit") == bool(meta["audit_due"]), "AUDIT_GATE",
@@ -536,6 +583,7 @@ class Engine:
             cast = self._cast(path)
             state = json.loads(self._read(path, "state.md"))
             if kind == "turn":
+                validate_state(state, cast, meta["turn"])
                 need(state["location"] != "НЕ ЗАДАНА", "OPENING_MISSING",
                      "Set opening scene before playing")
             given = participants or []
@@ -546,15 +594,25 @@ class Engine:
             if kind == "canon":
                 relevant = cast
             elif kind == "audit":
-                for row in self._active(path)[-15:]:
+                for row in _recent_turns(path, 15):
                     relevant.update(row.get("participants", []))
                 if meta["audit_due"] == 60:
                     relevant = cast
             need(relevant <= cast, "UNKNOWN_CHARACTER", "Character not registered in novel")
+            signature = self._source_signature(path, relevant, kind, self.instructions)
+            pending = meta.get("packet")
+            if (pending and pending["version"] == meta["version"] and
+                pending["kind"] == kind and pending["reader_text"] == reader_text and
+                pending["participants"] == sorted(relevant) and
+                pending.get("request_id") == request_id and
+                pending.get("source_signature") == signature):
+                return self._manifest(pending, meta["audit_due"], reused=True)
             if kind == "canon":
                 files = {"original.txt": self._read(path, "original.txt"),
                          "novel.md": self._read(path, "novel.md"),
                          "relationships.md": self._read(path, "relationships.md")}
+                need(digest(files["original.txt"]) == meta["original_hash"],
+                     "ORIGINAL_CORRUPTED", "Author's original source no longer matches")
             else:
                 files = {"engine/rules.md": self._read(self.instructions, "rules.md"),
                          "engine/skin_builder.md": self._read(self.instructions, "skin_builder.md"),
@@ -562,46 +620,71 @@ class Engine:
                          "state.md": self._read(path, "state.md"),
                          "relationships.md": self._read(path, "relationships.md"),
                          "timeline.md": self._read(path, "timeline.md")}
+            if meta.get("novel_hash"):
+                need(digest(files["novel.md"]) == meta["novel_hash"],
+                     "CANON_CHANGED", "Main questionnaire changed outside the engine")
             for name in sorted(relevant):
-                files["characters/" + name + ".md"] = self._read(path, "characters/" + name + ".md")
+                card_path = "characters/" + name + ".md"
+                files[card_path] = self._read(path, card_path)
                 files["knowledge/" + name + ".md"] = self._read(path, "knowledge/" + name + ".md")
+                if name in meta.get("card_hashes", {}):
+                    need(digest(files[card_path]) == meta["card_hashes"][name],
+                         "CANON_CHANGED", "A character card changed outside the engine")
             files["characters/pov.md"] = self._read(path, "characters/pov.md") \
                 if (path / "characters/pov.md").exists() else ""
+            if files["characters/pov.md"] and "pov" in meta.get("card_hashes", {}):
+                need(digest(files["characters/pov.md"]) == meta["card_hashes"]["pov"],
+                     "CANON_CHANGED", "POV card changed outside the engine")
             if kind != "canon":
                 files["knowledge/pov.md"] = self._read(path, "knowledge/pov.md")
-            recent = [] if kind == "canon" else self._active(path)[-15 if kind == "audit" else -3:]
-            text = dump({"kind": kind, "reader_text": reader_text,
-                         "audit_due": meta["audit_due"], "participants": sorted(relevant),
-                         "files": files, "recent_scenes": recent})
-            content_chunks = chunks(text)
+            recent = [] if kind == "canon" else _recent_turns(path, 15 if kind == "audit" else 3)
+            payload = dump({"kind": kind, "reader_text": reader_text,
+                            "audit_due": meta["audit_due"], "participants": sorted(relevant),
+                            "files": files, "recent_scenes": recent})
+            content_chunks = chunks(payload)
+            offsets = []
+            position = 0
+            for piece in content_chunks:
+                size = len(piece.encode("utf-8"))
+                offsets.append([position, size])
+                position += size
             pid = secrets.token_hex(16)
             packet = {"id": pid, "version": meta["version"], "kind": kind,
                       "reader_text": reader_text, "participants": sorted(relevant),
+                      "request_id": request_id, "source_signature": signature,
                       "hashes": [digest(c) for c in content_chunks], "received": [],
-                      "sha256": digest(text)}
-            atomic(path / "system/packet.json", text)
+                      "offsets": offsets, "sha256": digest(payload)}
+            atomic(path / "system/packet.json", payload)
             atomic(path / "system/meta.json", dump({**meta, "packet": packet}))
-            return {"packet_id": pid, "version": meta["version"],
-                    "chunk_count": len(content_chunks), "chunk_size": CHUNK_SIZE,
-                    "chunk_hashes": packet["hashes"], "sha256": packet["sha256"],
-                    "participants": packet["participants"], "audit_due": meta["audit_due"]}
+            return self._manifest(packet, meta["audit_due"])
 
     def read_chunk(self, sid: str, packet_id: str, index: int) -> dict:
         with self._locked(sid) as (path, meta):
             packet = meta.get("packet")
             need(packet is not None and packet["id"] == packet_id and
-                 packet["version"] == meta["version"], "PACKET_EXPIRED", "Prepare fresh context")
-            parts = chunks(self._read(path, "system/packet.json"))
-            need(type(index) is int and 0 <= index < len(parts),
+                 packet["version"] == meta["version"], "PACKET_EXPIRED",
+                 "Prepare fresh context only if this packet actually expired")
+            need(type(index) is int and 0 <= index < len(packet["offsets"]),
                  "CHUNK_INDEX", "Invalid chunk index")
-            fragment = parts[index]
-            need(digest(fragment) == packet["hashes"][index], "CHUNK_HASH",
-                 "Stored context packet has changed")
+            offset, length = packet["offsets"][index]
+            with (path / "system/packet.json").open("rb") as handle:
+                handle.seek(offset)
+                fragment_bytes = handle.read(length)
+            need(len(fragment_bytes) == length and
+                 sha256(fragment_bytes).hexdigest() == packet["hashes"][index],
+                 "CHUNK_HASH", "Stored context packet has changed")
+            fragment = fragment_bytes.decode("utf-8")
             if index not in packet["received"]:
                 packet["received"].append(index)
                 atomic(path / "system/meta.json", dump(meta))
-            return {"index": index, "content": fragment, "sha256": digest(fragment),
-                    "chunk_count": len(parts), "packet_id": packet_id}
+            unread = [i for i in range(len(packet["hashes"]))
+                      if i not in packet["received"]]
+            return {"index": index, "content": fragment,
+                    "sha256": packet["hashes"][index],
+                    "chunk_count": len(packet["hashes"]), "packet_id": packet_id,
+                    "next_chunk_index": unread[0] if unread else None,
+                    "unread_chunk_indices": unread,
+                    "all_chunks_read": not unread}
 
     @staticmethod
     def _receipt(meta: dict, packet_id: str, hashes: list[str], kind: str) -> dict:
