@@ -735,9 +735,9 @@ class Engine:
 
     @staticmethod
     def _apply_relations(current: dict, changes: list[dict], cast: set[str],
-                         participants: set[str]) -> dict:
+                         participants: set[str], narration: str) -> dict:
         try:
-            return relationship_store.update(current, changes, cast, participants)
+            return relationship_store.update(current, changes, cast, participants, narration)
         except relationship_store.RelationProblem as exc:
             raise EngineError("RELATION_INVALID", str(exc), 422) from exc
 
@@ -836,7 +836,8 @@ class Engine:
                          "UNLOADED_RELATION_OWNER",
                          "Load the source character before changing their relationships")
             after_rel = dump(self._apply_relations(
-                json.loads(before_rel), data["relations"], cast, set(used)))
+                json.loads(before_rel), data["relations"], cast, set(used),
+                data["narration"]))
             files = {"state.md": dump(state)}
             if after_rel != before_rel:
                 files["relationships.md"] = after_rel
