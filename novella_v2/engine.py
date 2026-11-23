@@ -538,6 +538,7 @@ class Engine:
                     "canon_hash": canon_hash, "original_hash": digest(original),
                     "novel_hash": digest(novel),
                     "relation_rule_hash": digest(candidate_relations["rules"]),
+                    "relationship_file_hash": digest(files["relationships.md"]),
                     "card_hashes": {name: digest(files["characters/" + name + ".md"])
                                     for name in set(names) | ({"pov"} if partitions["pov"] else set())},
                     "segments": deepcopy(blocks), "packet": None, "audit_due": 0,
@@ -580,6 +581,10 @@ class Engine:
             cast = self._cast(path)
             state = validate_state(state, cast, 0)
             files = {"state.md": dump(state)}
+            if meta.get("relationship_file_hash"):
+                need(digest(self._read(path, "relationships.md")) ==
+                     meta["relationship_file_hash"], "RELATION_FILE_CHANGED",
+                     "Opening relationships were changed outside the engine")
             if relationships is not None:
                 validated = validate_relations(relationships, cast)
                 existing = validate_relations(
@@ -592,6 +597,8 @@ class Engine:
                      "Opening edit cannot replace established relationship rules")
                 files["relationships.md"] = dump(validated)
             new = {**meta, "version": meta["version"] + 1, "packet": None}
+            if "relationships.md" in files:
+                new["relationship_file_hash"] = digest(files["relationships.md"])
             self._write(path, meta, files, new)
             return {"version": new["version"], "opening_saved": True}
 
@@ -612,14 +619,19 @@ class Engine:
             insert_at = len(novel) if boundary < 0 else boundary
             novel = (novel[:insert_at].rstrip("\n") + "\n- " + name + " — " +
                      display.strip() + "\n" + novel[insert_at:])
+            original_relationships = self._read(path, "relationships.md")
+            if meta.get("relationship_file_hash"):
+                need(digest(original_relationships) == meta["relationship_file_hash"],
+                     "RELATION_FILE_CHANGED", "Relations changed outside the engine")
             old_rel = validate_relations(
-                json.loads(self._read(path, "relationships.md")), self._cast(path))
+                json.loads(original_relationships), self._cast(path))
             new_rel = validate_relations(old_rel, self._cast(path) | {name})
             files = {"novel.md": novel, "characters/" + name + ".md":
                      CHARACTER_RULE + established_text,
                      "knowledge/" + name + ".md": "# Новые знания: " + name + "\n",
                      "relationships.md": dump(new_rel)}
             new = {**meta, "version": meta["version"] + 1, "packet": None,
+                   "relationship_file_hash": digest(files["relationships.md"]),
                    "novel_hash": digest(novel),
                    "card_hashes": {**meta.get("card_hashes", {}),
                                    name: digest(files["characters/" + name + ".md"])}}
@@ -753,6 +765,12 @@ class Engine:
                 need(digest(normalized_rel["rules"]) == meta["relation_rule_hash"],
                      "RELATION_RULE_CHANGED",
                      "Approved relationship rule changed outside authorized setup")
+            # New sessions pin the entire mutable relationship file. Legacy
+            # sessions without this hash still load and normalize safely.
+            if meta.get("relationship_file_hash"):
+                need(digest(files["relationships.md"]) == meta["relationship_file_hash"],
+                     "RELATION_FILE_CHANGED",
+                     "Relationship file changed outside an authorized transaction")
             files["relationships.md"] = dump(normalized_rel)
             open_threads.parse(files["open_threads.md"])
             if meta.get("novel_hash"):
@@ -931,6 +949,9 @@ class Engine:
                 except TypeError:
                     raise EngineError("TIME_FORMAT", "Use compatible datetime offsets", 422)
             before_rel = self._read(path, "relationships.md")
+            if meta.get("relationship_file_hash"):
+                need(digest(before_rel) == meta["relationship_file_hash"],
+                     "RELATION_FILE_CHANGED", "Relations changed outside authorized gameplay")
             if meta.get("relation_rule_hash"):
                 current_rel = validate_relations(json.loads(before_rel), cast)
                 need(digest(current_rel["rules"]) == meta["relation_rule_hash"],
@@ -1023,6 +1044,7 @@ class Engine:
                   15 if (meta["turn"] + 1) % 15 == 0 else 0
             new = deepcopy(meta)
             new.update(version=meta["version"] + 1, turn=meta["turn"] + 1,
+                       relationship_file_hash=digest(after_rel),
                        audit_due=due, packet=None,
                        last_undo={"request_id": req, "before": before,
                                   "prior_turn": meta["turn"],
@@ -1054,6 +1076,9 @@ class Engine:
             new = deepcopy(meta)
             new.update(version=meta["version"] + 1,
                        turn=undo["prior_turn"],
+                       relationship_file_hash=digest(
+                           files.get("relationships.md",
+                                     self._read(path, "relationships.md"))),
                        audit_due=undo["prior_audit_due"],
                        last_undo=None, packet=None)
             new["requests"][request_id]["reverted"] = True
@@ -1085,6 +1110,11 @@ class Engine:
             trail: list[dict] = []
             cast = self._cast(path)
             archived = self._active(path)
+            if meta.get("relationship_file_hash"):
+                need(digest(self._read(path, "relationships.md")) ==
+                     meta["relationship_file_hash"],
+                     "RELATION_FILE_CHANGED",
+                     "Relationships changed outside authorized gameplay")
             if meta.get("relation_rule_hash"):
                 current_rel = validate_relations(
                     json.loads(self._read(path, "relationships.md")), cast)
@@ -1203,6 +1233,8 @@ class Engine:
                  "report": report, "corrections": trail}) + "\n"
             new = {**meta, "version": meta["version"] + 1, "audit_due": 0,
                    "packet": None, "last_undo": None}
+            if "relationships.md" in changes:
+                new["relationship_file_hash"] = digest(changes["relationships.md"])
             self._write(path, meta, changes, new)
             return {"audited": True, "turn": meta["turn"],
                     "version": new["version"], "corrections": len(trail)}
