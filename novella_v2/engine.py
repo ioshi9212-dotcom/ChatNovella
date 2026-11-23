@@ -537,6 +537,7 @@ class Engine:
             meta = {"session_id": sid, "version": 1, "turn": 0, "approved": False,
                     "canon_hash": canon_hash, "original_hash": digest(original),
                     "novel_hash": digest(novel),
+                    "relation_rule_hash": digest(candidate_relations["rules"]),
                     "card_hashes": {name: digest(files["characters/" + name + ".md"])
                                     for name in set(names) | ({"pov"} if partitions["pov"] else set())},
                     "segments": deepcopy(blocks), "packet": None, "audit_due": 0,
@@ -583,6 +584,10 @@ class Engine:
                 validated = validate_relations(relationships, cast)
                 existing = validate_relations(
                     json.loads(self._read(path, "relationships.md")), cast)
+                if meta.get("relation_rule_hash"):
+                    need(digest(existing["rules"]) == meta["relation_rule_hash"],
+                         "RELATION_RULE_CHANGED",
+                         "Stored relationship rule was changed outside engine")
                 need(validated["rules"] == existing["rules"], "RELATION_RULE_IMMUTABLE",
                      "Opening edit cannot replace established relationship rules")
                 files["relationships.md"] = dump(validated)
@@ -742,8 +747,13 @@ class Engine:
                              if (path / "open_threads.md").exists() else open_threads.HEADER)}
             # Normalize legacy two-section relationships for a safe transition.
             # New files always include a short rule and directed familiarity.
-            files["relationships.md"] = dump(validate_relations(
-                json.loads(files["relationships.md"]), cast))
+            normalized_rel = validate_relations(
+                json.loads(files["relationships.md"]), cast)
+            if meta.get("relation_rule_hash"):
+                need(digest(normalized_rel["rules"]) == meta["relation_rule_hash"],
+                     "RELATION_RULE_CHANGED",
+                     "Approved relationship rule changed outside authorized setup")
+            files["relationships.md"] = dump(normalized_rel)
             open_threads.parse(files["open_threads.md"])
             if meta.get("novel_hash"):
                 need(digest(files["novel.md"]) == meta["novel_hash"],
@@ -921,6 +931,10 @@ class Engine:
                 except TypeError:
                     raise EngineError("TIME_FORMAT", "Use compatible datetime offsets", 422)
             before_rel = self._read(path, "relationships.md")
+            if meta.get("relation_rule_hash"):
+                current_rel = validate_relations(json.loads(before_rel), cast)
+                need(digest(current_rel["rules"]) == meta["relation_rule_hash"],
+                     "RELATION_RULE_CHANGED", "Approved relationship rule changed")
             before_timeline = self._read(path, "timeline.md")
             before_threads = (self._read(path, "open_threads.md")
                               if (path / "open_threads.md").exists() else open_threads.HEADER)
@@ -1071,6 +1085,12 @@ class Engine:
             trail: list[dict] = []
             cast = self._cast(path)
             archived = self._active(path)
+            if meta.get("relation_rule_hash"):
+                current_rel = validate_relations(
+                    json.loads(self._read(path, "relationships.md")), cast)
+                need(digest(current_rel["rules"]) == meta["relation_rule_hash"],
+                     "RELATION_RULE_CHANGED",
+                     "Approved relationship rule changed before audit")
             for name, row in corrections.items():
                 need(name in {"state.md", "relationships.md", "timeline.md"} or
                      (re.fullmatch(r"knowledge/[a-z][a-z0-9_]{1,49}\.md", name) and
