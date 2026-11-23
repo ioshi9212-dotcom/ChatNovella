@@ -10,7 +10,9 @@ import re
 HEADER = "# Незавершённые линии\n"
 MAX_OPEN = 48
 ID = re.compile(r"^[a-z][a-z0-9_]{1,49}$")
-ROW = re.compile(r"^- \[(not_started|active)\] ([a-z][a-z0-9_]{1,49}) \| (.+) \| (.+) \| ход ([0-9]{1,8})$")
+ROW = re.compile(r"^- \[(не началась|активна)\] ([a-z][a-z0-9_]{1,49}) \| (.+) \| (.+) \| ход ([0-9]{1,8})$")
+DISPLAY = {"not_started": "не началась", "active": "активна"}
+PARSE_DISPLAY = {value: key for key, value in DISPLAY.items()}
 
 
 class ThreadProblem(ValueError):
@@ -52,7 +54,7 @@ def render(items: list[dict]) -> str:
            "Duplicate thread id")
     clean.sort(key=lambda v: (v["status"] != "active", -v["turn"], v["id"]))
     return HEADER + "".join(
-        "- [" + x["status"] + "] " + x["id"] + " | " + x["title"] +
+        "- [" + DISPLAY[x["status"]] + "] " + x["id"] + " | " + x["title"] +
         " | " + x["note"] + " | ход " + str(x["turn"]) + "\n"
         for x in clean
     )
@@ -66,7 +68,7 @@ def parse(text: str) -> list[dict]:
         match = ROW.fullmatch(line)
         _check(match is not None, "Invalid open_threads.md line")
         status, ident, title, note, turn = match.groups()
-        items.append(_entry({"status": status, "id": ident, "title": title,
+        items.append(_entry({"status": PARSE_DISPLAY[status], "id": ident, "title": title,
                              "note": note, "turn": int(turn)}))
     _check(render(items) == text, "Noncanonical or duplicated open_threads.md")
     return items
