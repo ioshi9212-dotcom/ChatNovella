@@ -145,7 +145,8 @@ class TestEngine(unittest.TestCase):
 
     def test_commit_idempotent_and_searchable_history(self):
         packet, payload = self.packet()
-        self.assertIn("engine/skin_builder.md", payload["files"])
+        self.assertNotIn("engine/skin_builder.md", payload["files"])
+        self.assertNotIn("engine/rules.md", payload["files"])
         data = self.turn(packet=packet, knowledge=[
             {"owner": "adrian", "fact": "POV собирается уехать",
              "source": "Ты уезжаешь завтра?"}],
