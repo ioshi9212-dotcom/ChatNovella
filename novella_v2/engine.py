@@ -201,7 +201,8 @@ class Engine:
 
     @staticmethod
     def _read(path: Path, name: str) -> str:
-        return (path / name).read_text(encoding="utf-8")
+        # read_text() normalizes CRLF: original author bytes must remain literal.
+        return (path / name).read_bytes().decode("utf-8")
 
     @staticmethod
     def _cast(path: Path) -> set[str]:
@@ -571,8 +572,10 @@ class Engine:
                      "KNOWLEDGE_OWNER", "Knowledge only for a loaded participant or POV")
                 need(isinstance(fact, str) and 0 < len(fact.strip()) <= 350 and
                      isinstance(source, str) and 3 <= len(source) <= 400 and
+                     "\\n" not in fact and "\\r" not in fact and
+                     "\\n" not in source and "\\r" not in source and
                      source in data["narration"], "KNOWLEDGE_SOURCE",
-                     "New fact needs an exact excerpt from the saved scene")
+                     "New fact must be single-line with an exact excerpt from the saved scene")
                 filename = "knowledge/" + owner + ".md"
                 current = files.get(filename)
                 if current is None:
@@ -594,9 +597,10 @@ class Engine:
                 text = event["text"]
                 names = event["participants"]
                 need(isinstance(text, str) and 0 < len(text.strip()) <= 350 and
+                     "\\n" not in text and "\\r" not in text and
                      isinstance(names, list) and all(isinstance(n, str) for n in names)
                      and len(names) == len(set(names)) and set(names) <= set(used) | {"pov"},
-                     "EVENT_DATA", "Event text/participants invalid")
+                     "EVENT_DATA", "Event must be a single-line milestone with known participants")
                 need("\n" + text.strip() + "\n" not in timeline,
                      "EVENT_DUPLICATE", "Identical world milestone already recorded")
                 timeline += ("\nХод " + str(meta["turn"] + 1) +
