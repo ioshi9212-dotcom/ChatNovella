@@ -316,6 +316,10 @@ class Engine:
             for name, encoded in pending["files"].items():
                 need(safe_rel(name), "RECOVERY_PATH", "Invalid pending file")
                 atomic(path / name, base64.b64decode(encoded).decode("utf-8"))
+            for name, entry in pending.get("appends", {}).items():
+                need(name == "history.jsonl", "RECOVERY_PATH",
+                     "Only the scene archive supports pending appends")
+                _apply_append(path / name, entry)
             meta = pending["next"]
             atomic(path / "system/meta.json", dump(meta))
         return meta
@@ -339,14 +343,24 @@ class Engine:
              "Session version changed; prepare a fresh context", 409)
 
     @staticmethod
-    def _write(path: Path, meta: dict, files: dict[str, str], new: dict) -> None:
+    def _write(path: Path, meta: dict, files: dict[str, str], new: dict,
+               appends: dict[str, str] | None = None) -> None:
+        appends = appends or {}
         for name in files:
-            need(safe_rel(name), "PATH_NOT_ALLOWED", "Write outside session documents")
+            need(safe_rel(name) and name not in appends, "PATH_NOT_ALLOWED",
+                 "Write outside session documents or conflicting write modes")
+        need(set(appends).issubset({"history.jsonl"}), "PATH_NOT_ALLOWED",
+             "Append allowed only for the full scene archive")
+        append_specs = {k: _append_descriptor(path / k, value)
+                        for k, value in appends.items()}
         pending = {"files": {k: base64.b64encode(v.encode("utf-8")).decode("ascii")
-                             for k, v in files.items()}, "next": new}
+                             for k, v in files.items()},
+                   "appends": append_specs, "next": new}
         atomic(path / "system/meta.json", dump({**meta, "pending": pending}))
         for name, content in files.items():
             atomic(path / name, content)
+        for name, descriptor in append_specs.items():
+            _apply_append(path / name, descriptor)
         atomic(path / "system/meta.json", dump(new))
 
     def create(self, original: str, blocks: list[dict], names: dict[str, str],
