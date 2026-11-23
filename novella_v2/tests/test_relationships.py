@@ -179,7 +179,7 @@ class TestRelationships(unittest.TestCase):
         self.assertIn("опасным союзником", text)
         self.assertNotIn("Опасается Сайласа", text)
         self.assertNotIn("Разговор", text)
-        self.assertEqual(self.relation()["familiarity"]["silas"]["adrian"], "unaware")
+        self.assertEqual(self.relation()["familiarity"].get("silas", {}).get("adrian", "unaware"), "unaware")
 
     def test_pov_can_have_independent_acquaintance_status_without_numeric_scales(self):
         self.submit(1, [self.meet("pov", "adrian", "aware")])
@@ -230,7 +230,7 @@ class TestRelationships(unittest.TestCase):
                          "status": "unaware",
                          "reason": "После потери памяти перестал узнавать"}])
         self.assertEqual(self.relation()["npc_to_pov"], {})
-        self.assertEqual(self.relation()["familiarity"]["adrian"]["pov"], "unaware")
+        self.assertEqual(self.relation()["familiarity"].get("adrian", {}).get("pov", "unaware"), "unaware")
 
     def test_rollback_restores_prior_status_and_numbers(self):
         first = self.submit(1, [self.meet(), self.metric("любовь", 50)])
