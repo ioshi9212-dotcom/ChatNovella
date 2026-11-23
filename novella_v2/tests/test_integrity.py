@@ -186,6 +186,18 @@ class TestV2Integrity(unittest.TestCase):
         self.assertEqual(restarted.commit(self.sid, data), first)
         self.assertEqual(len(restarted.history(self.sid)), 1)
 
+    def test_full_narration_not_duplicated_in_metadata(self):
+        p, _ = self.packet()
+        large_scene = "**Адриан** — " + "Н" * 28_000
+        data = self.turn(p, narration=large_scene)
+        saved = self.engine.commit(self.sid, data)
+        meta_bytes = self.path("system/meta.json").read_bytes()
+        self.assertNotIn(("Н" * 200).encode("utf-8"), meta_bytes)
+        self.assertLess(len(meta_bytes), 15_000)
+        self.assertIn(large_scene, self.path("history.jsonl").read_text(encoding="utf-8"))
+        restarted = Engine(self.root / "storage", self.root / "instructions")
+        self.assertEqual(restarted.commit(self.sid, data), saved)
+
     def test_reusing_request_id_for_new_data_is_rejected(self):
         p, _ = self.packet()
         data = self.turn(p)
