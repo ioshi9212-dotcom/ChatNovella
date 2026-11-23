@@ -161,13 +161,13 @@ class TestEngine(unittest.TestCase):
                                   "Вошёл в комнату и назвался Маркусом.")
         packet, payload = self.packet()
         self.assertNotIn("characters/marcus.md", payload["files"])
-        new_packet, new_payload = self.packet(participants=["adrian", "marcus"])
-        self.assertIn("characters/marcus.md", new_payload["files"])
         data = self.turn(packet=packet)
         data["state"]["present"]["marcus"] = empty_actor()
         data["participants"].append("marcus")
         with self.assertRaisesRegex(EngineError, "Load any entering character"):
             self.engine.commit(self.sid, data)
+        new_packet, new_payload = self.packet(participants=["adrian", "marcus"])
+        self.assertIn("characters/marcus.md", new_payload["files"])
         self.assertGreater(new_packet["version"], 0)
 
     def test_due_15_blocks_and_audit_reopens(self):
