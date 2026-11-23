@@ -738,15 +738,21 @@ class Engine:
                      "REQUEST_REUSED", "Request id was reused or rolled back")
                 # Avoid copying every full scene into metadata on each turn.
                 # The full narration lives only in the durable history archive.
-                scene = next((row["narration"] for row in self._active(path)
-                              if row.get("request_id") == req), None)
-                need(scene is not None, "HISTORY_INTEGRITY",
+                stored = _archived_turn(path, req)
+                need(stored is not None, "HISTORY_INTEGRITY",
                      "Saved request is missing from the scene archive")
-                return {**prior["result"], "narration": scene}
+                return {**prior["result"], "narration": stored["narration"]}
             self._version(meta, data["expected_version"])
             need(meta["approved"] and not meta["audit_due"], "AUDIT_GATE",
                  "Approval or audit required")
             packet = self._receipt(meta, data["packet_id"], data["chunk_hashes"], "turn")
+            need(packet.get("request_id") is None or
+                 packet["request_id"] == req, "REQUEST_ID_MISMATCH",
+                 "Prepared request ID and committed request ID differ")
+            need(packet.get("source_signature") ==
+                 self._source_signature(path, set(packet["participants"]),
+                                        "turn", self.instructions),
+                 "SOURCE_CHANGED", "A file changed after preparing the context")
             need(packet["reader_text"] == data["reader_text"],
                  "INPUT_MISMATCH", "Prepared and committed reader text differ")
             cast = self._cast(path)
@@ -760,6 +766,7 @@ class Engine:
             need((set(state["present"]) | set(state["remote"])) <= set(used),
                  "STATE_UNLOADED", "All present/remote characters must be loaded")
             before_state = json.loads(self._read(path, "state.md"))
+            validate_state(before_state, cast, meta["turn"])
             if before_state["datetime"] and state["datetime"]:
                 try:
                     need(datetime.fromisoformat(state["datetime"]) >=
@@ -825,12 +832,14 @@ class Engine:
                              "Участники: " + ", ".join(names) + "\n" +
                              text.strip() + "\n")
             files["timeline.md"] = timeline
-            history = self._read(path, "history.jsonl")
+            older_scenes = _recent_turns(path, 3)
+            warnings = (["SCENE_NEAR_DUPLICATE"]
+                        if _near_duplicate(data["narration"], older_scenes) else [])
             record = {"kind": "turn", "turn": meta["turn"] + 1, "request_id": req,
                       "reader_text": data["reader_text"], "narration": data["narration"],
                       "participants": list(used), "knowledge": knowledge_rows,
-                      "events": data["events"], "relations": data["relations"]}
-            files["history.jsonl"] = history + dump(record) + "\n"
+                      "events": data["events"], "relations": data["relations"],
+                      "warnings": warnings}
             due = 60 if (meta["turn"] + 1) % 60 == 0 else \
                   15 if (meta["turn"] + 1) % 15 == 0 else 0
             new = deepcopy(meta)
@@ -841,11 +850,12 @@ class Engine:
                                   "prior_audit_due": meta["audit_due"]})
             result = {"saved": True, "session_id": sid, "turn": new["turn"],
                       "version": new["version"], "audit_due": due,
-                      "narration": data["narration"]}
+                      "narration": data["narration"], "warnings": warnings}
             new["requests"][req] = {"hash": request_hash,
                                     "result": {k: v for k, v in result.items()
                                                if k != "narration"}}
-            self._write(path, meta, files, new)
+            self._write(path, meta, files, new,
+                        appends={"history.jsonl": dump(record) + "\n"})
             return result
 
     def rollback(self, sid: str, expected_version: int,
@@ -857,17 +867,16 @@ class Engine:
                  isinstance(reason, str) and reason.strip(), "ROLLBACK_LAST_ONLY",
                  "Rollback requires exact last turn request id and reason")
             files = deepcopy(undo["before"])
-            history = self._read(path, "history.jsonl")
-            files["history.jsonl"] = history + dump(
-                {"kind": "rollback", "reverts": request_id,
-                 "reason": reason, "turn": meta["turn"]}) + "\n"
+            marker = dump({"kind": "rollback", "reverts": request_id,
+                           "reason": reason, "turn": meta["turn"]}) + "\n"
             new = deepcopy(meta)
             new.update(version=meta["version"] + 1,
                        turn=undo["prior_turn"],
                        audit_due=undo["prior_audit_due"],
                        last_undo=None, packet=None)
             new["requests"][request_id]["reverted"] = True
-            self._write(path, meta, files, new)
+            self._write(path, meta, files, new,
+                        appends={"history.jsonl": marker})
             return {"rolled_back": True, "turn": new["turn"],
                     "version": new["version"]}
 
@@ -884,6 +893,8 @@ class Engine:
             need(isinstance(report, dict) and set(report) == required and all(
                  isinstance(value, str) and bool(value.strip()) for value in report.values()),
                  "AUDIT_REPORT", "Audit must check required domains")
+            need(digest(self._read(path, "original.txt")) == meta["original_hash"],
+                 "ORIGINAL_CORRUPTED", "Author's original changed; audit cannot continue")
             corrections = corrections or {}
             need(isinstance(corrections, dict), "AUDIT_CORRECTIONS", "Invalid corrections")
             changes: dict[str, str] = {}
