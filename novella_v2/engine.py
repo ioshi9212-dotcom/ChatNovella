@@ -697,6 +697,32 @@ class Engine:
                 changes[name] = after
                 trail.append({"file": name, "reason": row["reason"],
                               "before": current, "after": after})
+            # Deterministically reconcile every committed fact/milestone with
+            # its authoritative original scene archive. This catches loss or
+            # accidental editing; semantic accuracy remains the writer's duty.
+            archived = self._active(path)
+            existing_files: dict[str, str] = {}
+            for old_turn in archived:
+                for fact in old_turn.get("knowledge", []):
+                    owner = fact["owner"]
+                    filename = "knowledge/" + owner + ".md"
+                    if filename not in existing_files:
+                        existing_files[filename] = changes.get(
+                            filename, self._read(path, filename))
+                    marker = ("- " + fact["fact"].strip() +
+                              " [источник: " + fact["source"].strip() + "]")
+                    need(marker in existing_files[filename],
+                         "AUDIT_MISSING_KNOWLEDGE",
+                         "A previously saved personal fact disappeared from " + filename)
+                if old_turn.get("events"):
+                    if "timeline.md" not in existing_files:
+                        existing_files["timeline.md"] = changes.get(
+                            "timeline.md", self._read(path, "timeline.md"))
+                    for event in old_turn["events"]:
+                        need("\n" + event["text"].strip() + "\n" in
+                             existing_files["timeline.md"],
+                             "AUDIT_MISSING_EVENT",
+                             "A previously saved world event disappeared from timeline.md")
             audit_log = self._read(path, "system/audit.jsonl")
             changes["system/audit.jsonl"] = audit_log + dump(
                 {"turn": meta["turn"], "level": meta["audit_due"],
