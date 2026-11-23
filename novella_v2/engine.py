@@ -572,8 +572,8 @@ class Engine:
                      "KNOWLEDGE_OWNER", "Knowledge only for a loaded participant or POV")
                 need(isinstance(fact, str) and 0 < len(fact.strip()) <= 350 and
                      isinstance(source, str) and 3 <= len(source) <= 400 and
-                     "\\n" not in fact and "\\r" not in fact and
-                     "\\n" not in source and "\\r" not in source and
+                     "\n" not in fact and "\r" not in fact and
+                     "\n" not in source and "\r" not in source and
                      source in data["narration"], "KNOWLEDGE_SOURCE",
                      "New fact must be single-line with an exact excerpt from the saved scene")
                 filename = "knowledge/" + owner + ".md"
@@ -597,7 +597,7 @@ class Engine:
                 text = event["text"]
                 names = event["participants"]
                 need(isinstance(text, str) and 0 < len(text.strip()) <= 350 and
-                     "\\n" not in text and "\\r" not in text and
+                     "\n" not in text and "\r" not in text and
                      isinstance(names, list) and all(isinstance(n, str) for n in names)
                      and len(names) == len(set(names)) and set(names) <= set(used) | {"pov"},
                      "EVENT_DATA", "Event must be a single-line milestone with known participants")
