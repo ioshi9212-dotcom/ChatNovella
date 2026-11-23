@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import base64
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
-from novella_v2.engine import CHUNK_SIZE, Engine, EngineError, digest, empty_actor
+from novella_v2.engine import CHUNK_SIZE, Engine, EngineError, digest, empty_actor, atomic, dump
 
 
 class TestEngine(unittest.TestCase):
@@ -225,6 +226,45 @@ class TestEngine(unittest.TestCase):
         self.assertEqual(result["turn"], 15)
         self.assertEqual(self.engine.status(self.sid)["audit_due"], 0)
         self.packet(text="ход 16")
+
+    def test_sixty_real_turns_and_periodic_audits(self):
+        for number in range(1, 61):
+            text = "ход " + str(number)
+            packet, _ = self.packet(text=text)
+            data = self.turn(number=number, text=text,
+                             narration="**Адриан** — Продолжаем.", packet=packet)
+            saved = self.engine.commit(self.sid, data)
+            if number % 15 == 0:
+                self.assertEqual(saved["audit_due"], 60 if number == 60 else 15)
+                audit_packet, payload = self.packet(text="", kind="audit")
+                self.assertEqual(len(payload["recent_scenes"]), 15)
+                if number == 60:
+                    self.assertIn("knowledge/silas.md", payload["files"])
+                keys = {"continuity", "state", "knowledge", "timeline",
+                        "relationships"}
+                if number == 60:
+                    keys.add("long_term")
+                report = {key: "Проверено" for key in keys}
+                self.engine.audit(self.sid, audit_packet["version"],
+                                  audit_packet["packet_id"],
+                                  audit_packet["chunk_hashes"], report)
+        self.assertEqual(len(self.engine.history(self.sid)), 60)
+        self.assertEqual(self.engine.status(self.sid)["turn"], 60)
+        self.assertEqual(self.engine.status(self.sid)["audit_due"], 0)
+
+    def test_pending_transaction_recovers_after_simulated_crash(self):
+        directory = self.root / "storage" / self.sid
+        meta_file = directory / "system/meta.json"
+        meta = json.loads(meta_file.read_text(encoding="utf-8"))
+        new = {**meta, "version": meta["version"] + 1}
+        content = "# Хронология\n\nВосстановлено после аварии.\n"
+        pending = {"files": {"timeline.md": base64.b64encode(
+            content.encode("utf-8")).decode("ascii")}, "next": new}
+        atomic(meta_file, dump({**meta, "pending": pending}))
+        result = self.engine.status(self.sid)
+        self.assertEqual(result["version"], new["version"])
+        self.assertEqual((directory / "timeline.md").read_text(encoding="utf-8"), content)
+        self.assertNotIn("pending", json.loads(meta_file.read_text(encoding="utf-8")))
 
     def test_60_audit_reads_every_character_knowledge(self):
         # Check the long-audit scope without writing 60 fsync-heavy scenes.
