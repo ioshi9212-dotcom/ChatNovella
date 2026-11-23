@@ -165,6 +165,47 @@ class TestV2Http(unittest.TestCase):
         scenes = self.client.get(f"/v2/novels/{sid}/history", headers=self.auth).json()
         self.assertEqual(scenes["scenes"], [])
 
+    def test_http_same_request_resumes_and_replays_without_regeneration(self):
+        sid = self.start_novel()
+        url = f"/v2/novels/{sid}/prepare"
+        body = {"reader_text": "Привет", "participants": ["adrian"],
+                "kind": "turn", "request_id": "http-resume-1"}
+        first = self.client.post(url, headers=self.auth, json=body)
+        self.assertEqual(first.status_code, 200, first.text)
+        prepared = first.json()
+        self.assertFalse(prepared["all_chunks_read"])
+        second = self.client.post(url, headers=self.auth, json=body)
+        self.assertEqual(second.status_code, 200, second.text)
+        self.assertEqual(second.json()["packet_id"], prepared["packet_id"])
+        self.assertTrue(second.json()["reused_pending_packet"])
+        for index in second.json()["unread_chunk_indices"]:
+            result = self.client.get(
+                f"/v2/novels/{sid}/chunks/{prepared['packet_id']}/{index}",
+                headers=self.auth)
+            self.assertEqual(result.status_code, 200)
+        ready = self.client.post(url, headers=self.auth, json=body).json()
+        self.assertTrue(ready["all_chunks_read"])
+        scene = "**Адриан** — Получено."
+        saved = self.client.post(f"/v2/novels/{sid}/turns", headers=self.auth, json={
+            "request_id": body["request_id"],
+            "expected_version": prepared["version"],
+            "packet_id": prepared["packet_id"],
+            "chunk_hashes": prepared["chunk_hashes"],
+            "reader_text": body["reader_text"],
+            "narration": scene,
+            "participants": ["adrian"],
+            "state": state(1),
+            "knowledge": [], "events": [], "relations": [],
+        })
+        self.assertEqual(saved.status_code, 200, saved.text)
+        replay = self.client.post(url, headers=self.auth, json=body)
+        self.assertEqual(replay.status_code, 200, replay.text)
+        self.assertTrue(replay.json()["already_committed_duplicate"])
+        self.assertEqual(replay.json()["narration"], scene)
+        self.assertNotIn("packet_id", replay.json())
+        self.assertEqual(self.client.get(
+            f"/v2/novels/{sid}/history", headers=self.auth).json()["scenes"][0]["narration"], scene)
+
     def test_http_invalid_session_returns_client_error(self):
         self.assertEqual(self.client.get("/v2/novels/INVALID", headers=self.auth).status_code, 422)
 
