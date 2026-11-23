@@ -494,7 +494,12 @@ class Engine:
             state = validate_state(state, cast, 0)
             files = {"state.md": dump(state)}
             if relationships is not None:
-                files["relationships.md"] = dump(validate_relations(relationships, cast))
+                validated = validate_relations(relationships, cast)
+                existing = validate_relations(
+                    json.loads(self._read(path, "relationships.md")), cast)
+                need(validated["rules"] == existing["rules"], "RELATION_RULE_IMMUTABLE",
+                     "Opening edit cannot replace established relationship rules")
+                files["relationships.md"] = dump(validated)
             new = {**meta, "version": meta["version"] + 1, "packet": None}
             self._write(path, meta, files, new)
             return {"version": new["version"], "opening_saved": True}
@@ -965,14 +970,19 @@ class Engine:
             changes: dict[str, str] = {}
             trail: list[dict] = []
             cast = self._cast(path)
+            archived = self._active(path)
             for name, row in corrections.items():
                 need(name in {"state.md", "relationships.md", "timeline.md"} or
                      (re.fullmatch(r"knowledge/[a-z][a-z0-9_]{1,49}\.md", name) and
                       (name == "knowledge/pov.md" or name[10:-3] in cast)),
                      "AUDIT_PATH", "Audit may only correct current state documents")
-                need(isinstance(row, dict) and set(row) == {"before_sha256", "after", "reason"}
+                keys = {"before_sha256", "after", "reason"}
+                if name == "relationships.md":
+                    keys.add("evidence")
+                need(isinstance(row, dict) and set(row) == keys
                      and isinstance(row["after"], str) and isinstance(row["reason"], str)
-                     and row["reason"].strip(), "AUDIT_CHANGE", "Every correction needs a reason")
+                     and row["reason"].strip(), "AUDIT_CHANGE",
+                     "Every correction needs a reason and relationship corrections need evidence")
                 current = self._read(path, name)
                 need(row["before_sha256"] == digest(current), "AUDIT_STALE",
                      "Audit correction is based on a different file version")
@@ -980,7 +990,17 @@ class Engine:
                 if name == "state.md":
                     validate_state(json.loads(after), cast, meta["turn"])
                 elif name == "relationships.md":
-                    validate_relations(json.loads(after), cast)
+                    updated = validate_relations(json.loads(after), cast)
+                    prior = validate_relations(json.loads(current), cast)
+                    need(updated["rules"] == prior["rules"], "RELATION_RULE_IMMUTABLE",
+                         "Audit cannot alter author-approved relationship rules")
+                    quote = row["evidence"]
+                    need(isinstance(quote, str) and
+                         8 <= len(quote) <= 260 and
+                         (quote in self._read(path, "original.txt") or
+                          any(quote in scene["narration"] for scene in archived)),
+                         "AUDIT_RELATION_EVIDENCE",
+                         "Relationship correction requires an exact original or saved-scene excerpt")
                 elif name.startswith("knowledge/"):
                     need(after.startswith(current) and after != current,
                          "AUDIT_APPEND_ONLY",
@@ -998,7 +1018,6 @@ class Engine:
             open_threads.parse(self._read(path, "open_threads.md")
                                if (path / "open_threads.md").exists()
                                else open_threads.HEADER)
-            archived = self._active(path)
             existing_files: dict[str, str] = {}
             for old_turn in archived:
                 for fact in old_turn.get("knowledge", []):
