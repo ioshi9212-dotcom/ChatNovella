@@ -525,7 +525,13 @@ class Engine:
             if prior:
                 need(prior["hash"] == request_hash and not prior.get("reverted"),
                      "REQUEST_REUSED", "Request id was reused or rolled back")
-                return prior["result"]
+                # Avoid copying every full scene into metadata on each turn.
+                # The full narration lives only in the durable history archive.
+                scene = next((row["narration"] for row in self._active(path)
+                              if row.get("request_id") == req), None)
+                need(scene is not None, "HISTORY_INTEGRITY",
+                     "Saved request is missing from the scene archive")
+                return {**prior["result"], "narration": scene}
             self._version(meta, data["expected_version"])
             need(meta["approved"] and not meta["audit_due"], "AUDIT_GATE",
                  "Approval or audit required")
@@ -625,7 +631,9 @@ class Engine:
             result = {"saved": True, "session_id": sid, "turn": new["turn"],
                       "version": new["version"], "audit_due": due,
                       "narration": data["narration"]}
-            new["requests"][req] = {"hash": request_hash, "result": result}
+            new["requests"][req] = {"hash": request_hash,
+                                    "result": {k: v for k, v in result.items()
+                                               if k != "narration"}}
             self._write(path, meta, files, new)
             return result
 
