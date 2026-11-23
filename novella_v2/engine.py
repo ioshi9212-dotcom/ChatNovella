@@ -745,8 +745,8 @@ class Engine:
         required = {"request_id", "expected_version", "packet_id", "chunk_hashes",
                     "reader_text", "narration", "participants", "state",
                     "knowledge", "events", "relations"}
-        need(isinstance(data, dict) and
-             (set(data) == required or set(data) == required | {"thread_updates"}),
+        need(isinstance(data, dict) and required <= set(data) and
+             set(data) <= required | {"thread_updates", "scene_access"},
              "TURN_FIELDS", "Turn payload has fixed storage fields")
         req = data["request_id"]
         need(isinstance(req, str) and 1 <= len(req) <= 100, "REQUEST_ID", "Invalid request id")
@@ -789,6 +789,32 @@ class Engine:
                  "STATE_UNLOADED", "All present/remote characters must be loaded")
             before_state = json.loads(self._read(path, "state.md"))
             validate_state(before_state, cast, meta["turn"])
+            # A loaded card is not proof that its owner witnessed this scene.
+            # Allow entering/leaving within one turn via a brief literal
+            # narrative witness receipt, without forcing end-state presence.
+            present_during_turn = (set(before_state["present"]) |
+                                   set(before_state["remote"]) |
+                                   set(state["present"]) | set(state["remote"]))
+            access = data.get("scene_access", [])
+            need(isinstance(access, list) and len(access) <= len(used),
+                 "SCENE_ACCESS", "Scene access receipts must be short")
+            access_ids: set[str] = set()
+            for item in access:
+                need(isinstance(item, dict) and
+                     set(item) == {"character", "channel", "source"},
+                     "SCENE_ACCESS", "Witness receipt needs character/channel/source")
+                witness = item["character"]
+                need(witness in used and witness not in access_ids and
+                     item["channel"] in {"physical", "remote", "ability"} and
+                     isinstance(item["source"], str) and
+                     8 <= len(item["source"]) <= 260 and
+                     "\\n" not in item["source"] and
+                     item["source"] in data["narration"],
+                     "SCENE_ACCESS", "Access must be supported by a direct scene excerpt")
+                access_ids.add(witness)
+            need(set(used) <= present_during_turn | access_ids,
+                 "PHANTOM_PARTICIPANT",
+                 "A loaded character without actual scene access cannot gain knowledge or feelings")
             if before_state["datetime"] and state["datetime"]:
                 try:
                     need(datetime.fromisoformat(state["datetime"]) >=
@@ -871,7 +897,8 @@ class Engine:
                         if _near_duplicate(data["narration"], older_scenes) else [])
             record = {"kind": "turn", "turn": meta["turn"] + 1, "request_id": req,
                       "reader_text": data["reader_text"], "narration": data["narration"],
-                      "participants": list(used), "knowledge": knowledge_rows,
+                      "participants": list(used), "scene_access": access,
+                      "knowledge": knowledge_rows,
                       "events": data["events"], "relations": data["relations"],
                       "thread_updates": thread_changes,
                       "warnings": warnings}
