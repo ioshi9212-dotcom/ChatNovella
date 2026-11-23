@@ -73,6 +73,42 @@ class TestEngine(unittest.TestCase):
         self.assertIn("хоррор: высокий", (directory / "novel.md").read_text(encoding="utf-8"))
         self.assertFalse((directory / "characters/pov.md").exists())
 
+    def test_unique_text_anchors_are_lossless(self):
+        other = self.engine.create(self.original, [
+            {"anchor": "Мир жестокий.", "target": "novel"},
+            {"anchor": "Адриан упрямый", "target": "adrian"},
+            {"anchor": "Сайлас умный.", "target": "silas"},
+        ], {"adrian": "Адриан", "silas": "Сайлас"})
+        directory = self.root / "storage" / other["session_id"]
+        self.assertEqual((directory / "original.txt").read_text(encoding="utf-8"),
+                         self.original)
+        self.assertTrue((directory / "characters/adrian.md").read_text(
+            encoding="utf-8").endswith("Адриан упрямый и грубый.\n"))
+        with self.assertRaisesRegex(EngineError, "Each anchor must occur exactly once"):
+            self.engine.create(self.original, [
+                {"anchor": "и", "target": "novel"},
+                {"anchor": "Адриан", "target": "adrian"},
+            ], {"adrian": "Адриан"})
+
+    def test_pov_source_card_is_supported(self):
+        raw = "Мир.\nPOV: упрямая.\nАдриан: грубый.\n"
+        s1, s2 = raw.index("POV:"), raw.index("Адриан:")
+        result = self.engine.create(raw, [
+            {"start": 0, "end": s1, "target": "novel"},
+            {"start": s1, "end": s2, "target": "pov"},
+            {"start": s2, "end": len(raw), "target": "adrian"},
+        ], {"adrian": "Адриан"})
+        directory = self.root / "storage" / result["session_id"]
+        self.assertTrue((directory / "characters/pov.md").read_text(
+            encoding="utf-8").endswith("POV: упрямая.\n"))
+
+    def test_world_time_cannot_move_backwards(self):
+        packet, _ = self.packet()
+        data = self.turn(packet=packet)
+        data["state"]["datetime"] = "2026-09-11T18:00:00"
+        with self.assertRaisesRegex(EngineError, "World time cannot move backwards"):
+            self.engine.commit(self.sid, data)
+
     def test_gap_or_overlap_rejected(self):
         bad = deepcopy(self.blocks)
         bad[1]["start"] += 1
