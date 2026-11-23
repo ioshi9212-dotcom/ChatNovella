@@ -331,6 +331,37 @@ def _near_duplicate(scene: str, older: list[dict]) -> bool:
     return False
 
 
+def _speech_knowledge_flags(novel: str, scene: str, relationships: dict) -> list[str]:
+    """Conservative review cues only, not an automated semantic truth detector.
+
+    A character may learn an unfamiliar name during this very scene, ask
+    about an unknown person, lie, or be mistaken. Never reject prose by regex.
+    """
+    label_map: dict[str, str] = {"pov": "pov", "POV": "pov"}
+    for slug_name, display in re.findall(
+            r"(?m)^- ([a-z][a-z0-9_]{1,49}) — ([^\n]+)$", novel):
+        label_map[display.strip().casefold()] = slug_name
+        label_map[slug_name.casefold()] = slug_name
+    active = relationships.get("familiarity", {})
+    display_names = [(slug_name, display.strip()) for slug_name, display in
+                     re.findall(r"(?m)^- ([a-z][a-z0-9_]{1,49}) — ([^\n]+)$", novel)]
+    flagged: set[str] = set()
+    for line in scene.splitlines():
+        utterance = re.match(r"^\s*\*\*([^*\n]+)\*\*\s*[—–-]\s*(.+)$", line)
+        if not utterance:
+            continue
+        source = label_map.get(utterance.group(1).strip().casefold())
+        if source is None:
+            continue
+        for target, display in display_names:
+            if source == target or active.get(source, {}).get(target, "unaware") != "unaware":
+                continue
+            if re.search(r"(?<!\w)" + re.escape(display) + r"(?!\w)",
+                         utterance.group(2), re.IGNORECASE):
+                flagged.add("POSSIBLE_UNFAMILIAR_NAME:" + source + ":" + target)
+    return sorted(flagged)
+
+
 class Engine:
     def __init__(self, root: str | Path, instructions: str | Path | None = None):
         self.root = Path(root)
@@ -965,6 +996,9 @@ class Engine:
             older_scenes = _recent_turns(path, 3)
             warnings = (["SCENE_NEAR_DUPLICATE"]
                         if _near_duplicate(data["narration"], older_scenes) else [])
+            warnings.extend(_speech_knowledge_flags(
+                self._read(path, "novel.md"), data["narration"],
+                json.loads(after_rel)))
             record = {"kind": "turn", "turn": meta["turn"] + 1, "request_id": req,
                       "reader_text": data["reader_text"], "narration": data["narration"],
                       "participants": list(used), "scene_access": access,
