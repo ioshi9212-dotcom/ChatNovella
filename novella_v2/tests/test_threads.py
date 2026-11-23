@@ -188,7 +188,7 @@ class TestOpenThreads(unittest.TestCase):
         with self.assertRaisesRegex(ThreadProblem, "Too many unresolved"):
             render(entries + [{**entries[0], "id": "extra_1"}])
         with self.assertRaisesRegex(ThreadProblem, "Duplicate thread"):
-            render(entries + entries[:1])
+            render(entries[:-1] + entries[:1])
 
     def test_corrupt_active_file_stops_next_turn(self):
         self.path("open_threads.md").write_text("# Broken", encoding="utf-8")
