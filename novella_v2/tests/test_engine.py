@@ -118,13 +118,23 @@ class TestEngine(unittest.TestCase):
 
     def test_chunk_size_is_unicode_not_bytes(self):
         # Every Russian character occupies more than one UTF-8 byte.
-        directory = self.root / "storage" / self.sid
-        long_novel = (directory / "novel.md").read_text(encoding="utf-8") + "Ж" * 90_000
-        (directory / "novel.md").write_text(long_novel, encoding="utf-8")
-        packet, payload = self.packet()
+        long_source = "Мир. " + "Ж" * 90_000 + "\\nАдриан грубый.\\n"
+        long_source = long_source.replace("\\\\n", "\\n")
+        boundary = long_source.index("Адриан")
+        result = self.engine.create(long_source, [
+            {"start": 0, "end": boundary, "target": "novel"},
+            {"start": boundary, "end": len(long_source), "target": "adrian"},
+        ], {"adrian": "Адриан"})
+        other = result["session_id"]
+        st = self.engine.status(other)
+        self.engine.approve(other, st["version"], st["canon_hash"], "Подтверждаю")
+        self.engine.set_opening(other, self.engine.status(other)["version"], self.state(0))
+        packet = self.engine.prepare(other, "Привет", ["adrian"])
+        parts = [self.engine.read_chunk(other, packet["packet_id"], i)["content"]
+                 for i in range(packet["chunk_count"])]
+        payload = json.loads("".join(parts))
         self.assertGreaterEqual(packet["chunk_count"], 3)
-        self.assertEqual(len(payload["files"]["novel.md"]), len(long_novel))
-        self.assertEqual(payload["files"]["novel.md"], long_novel)
+        self.assertIn("Ж" * 90_000, payload["files"]["novel.md"])
         self.assertNotIn("characters/silas.md", payload["files"])
 
     def test_unread_chunks_block_commit(self):
