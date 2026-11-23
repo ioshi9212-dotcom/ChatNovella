@@ -51,6 +51,18 @@ def healthz():
     return {"status": "ok", "engine": "chatnovella-v2"}
 
 
+@app.get("/v2/instructions")
+def load_instructions():
+    """Full Rules + Skin Builder, explicitly once per chat or when asked."""
+    return store.load_instructions()
+
+
+@app.get("/v2/instructions/versions")
+def instruction_versions():
+    """Small optional version check, without returning instruction texts."""
+    return store.instruction_versions()
+
+
 @app.post("/v2/novels")
 def create(body: dict):
     return store.create(
