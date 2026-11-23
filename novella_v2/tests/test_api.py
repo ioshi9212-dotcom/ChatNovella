@@ -116,7 +116,9 @@ class TestV2Http(unittest.TestCase):
     def test_http_full_flow_with_memory_timeline_relations_and_rollback(self):
         sid = self.start_novel()
         p, content = self.prepared(sid)
-        self.assertIn("Только Skin Builder", content)
+        self.assertNotIn("Только Skin Builder", content)
+        self.assertNotIn("engine/skin_builder.md", content)
+        self.assertNotIn("engine/rules.md", content)
         scene = "**Адриан** — Встречаемся завтра."
         body = {
             "request_id": "remote-req-1",
