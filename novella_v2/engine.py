@@ -1078,7 +1078,9 @@ class Engine:
                       (name == "knowledge/pov.md" or name[10:-3] in cast)),
                      "AUDIT_PATH", "Audit may only correct current state documents")
                 keys = {"before_sha256", "after", "reason"}
-                if name == "relationships.md":
+                if name == "relationships.md" or (
+                    name in {"timeline.md"} or name.startswith("knowledge/")) and (
+                    isinstance(row, dict) and "evidence" in row):
                     keys.add("evidence")
                 need(isinstance(row, dict) and set(row) == keys
                      and isinstance(row["after"], str) and isinstance(row["reason"], str)
