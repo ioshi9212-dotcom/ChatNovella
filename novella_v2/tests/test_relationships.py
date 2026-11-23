@@ -134,8 +134,12 @@ class TestRelationships(unittest.TestCase):
 
     def test_strong_jump_and_drop_allowed_only_with_explanation(self):
         self.submit(1, [self.meet(), self.metric("доверие", 100)])
-        self.submit(2, [self.metric("доверие", 0, significant=True,
-                                    reason="Обнаружено тяжёлое предательство")])
+        self.submit(2, [{"source": "adrian", "target": "pov",
+                         "metric": "доверие", "value": 0,
+                         "reason": "Обнаружено тяжёлое предательство",
+                         "significant": True,
+                         "evidence": "Обнаружено тяжёлое предательство"}],
+                    narration="**Адриан** — Обнаружено тяжёлое предательство.")
         self.assertEqual(self.relation()["npc_to_pov"]["adrian"]["доверие"], 0)
 
     def test_strong_jump_without_significance_is_refused(self):
