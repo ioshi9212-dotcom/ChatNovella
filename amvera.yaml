@@ -1,9 +1,14 @@
+# STANDALONE ChatNovella V2 deployment branch only.
+# Never merge this root file into main: main runs the legacy Lite app.
+# Create a SECOND Amvera application linked to this branch.
 meta:
   environment: python
   toolchain:
     name: pip
     version: '3.12'
+build:
+  requirementsPath: novella_v2/requirements.txt
 run:
-  command: uvicorn chatnovella_lite.server:app --host 0.0.0.0 --port 8080 --workers 1
+  command: uvicorn novella_v2.amvera_entry:app --host 0.0.0.0 --port 8080 --workers 1
   containerPort: 8080
   persistenceMount: /data
