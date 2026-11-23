@@ -163,6 +163,60 @@ class AuditFixes(unittest.TestCase):
             self.store.set_opening(self.sid, self.store.status(self.sid)["version"],
                                    self.state(0), current)
 
+    def test_external_relationship_file_mutation_is_detected(self):
+        path = self.filepath("relationships.md")
+        file_content = json.loads(path.read_text(encoding="utf-8"))
+        file_content["familiarity"]["adrian"] = {"pov": "aware"}
+        atomic(path, dump(file_content))
+        with self.assertRaisesRegex(EngineError, "outside an authorized transaction"):
+            self.packet("Проверим защиту")
+
+    def test_audit_can_correct_relationships_with_archived_scene_evidence(self):
+        self.store.commit(self.sid, self.turn(1))
+        mp = self.filepath("system/meta.json")
+        meta = json.loads(mp.read_text(encoding="utf-8"))
+        meta["audit_due"] = 15
+        atomic(mp, dump(meta))
+        p = self.packet("", [], "audit")
+        before = self.filepath("relationships.md").read_text(encoding="utf-8")
+        corrected = json.loads(before)
+        corrected["familiarity"] = {"adrian": {"pov": "aware"}}
+        report = {k: "Проверено" for k in
+                  ("continuity", "state", "knowledge", "timeline", "relationships")}
+        saved = self.store.audit(self.sid, p["version"], p["packet_id"],
+                                 p["chunk_hashes"], report,
+                                 {"relationships.md": {
+                                     "before_sha256": digest(before),
+                                     "after": dump(corrected),
+                                     "reason": "Исправили подтверждённую связь",
+                                     "evidence": "Я говорю."
+                                 }})
+        self.assertTrue(saved["audited"])
+        current = json.loads(self.filepath("relationships.md").read_text(encoding="utf-8"))
+        self.assertEqual(current["familiarity"]["adrian"]["pov"], "aware")
+        self.packet("После аудита")
+
+    def test_audit_cannot_grant_knowledge_to_character_absent_from_source_scene(self):
+        self.store.commit(self.sid, self.turn(1))
+        mp = self.filepath("system/meta.json")
+        meta = json.loads(mp.read_text(encoding="utf-8"))
+        meta["audit_due"] = 15
+        atomic(mp, dump(meta))
+        p = self.packet("", [], "audit")
+        prior = self.filepath("knowledge/silas.md").read_text(encoding="utf-8")
+        new = prior + "\nЛожная запись [источник: Я говорю.]\n"
+        report = {k: "Проверено" for k in
+                  ("continuity", "state", "knowledge", "timeline", "relationships")}
+        with self.assertRaisesRegex(EngineError, "witnessed scene quote"):
+            self.store.audit(self.sid, p["version"], p["packet_id"],
+                             p["chunk_hashes"], report, {
+                "knowledge/silas.md": {
+                    "before_sha256": digest(prior), "after": new,
+                    "reason": "Попытка приписать чужое",
+                    "evidence": "Я говорю."
+                }
+            })
+
     def test_audit_cannot_replace_embedded_relationship_rule(self):
         self.store.commit(self.sid, self.turn(1))
         mp = self.filepath("system/meta.json")
