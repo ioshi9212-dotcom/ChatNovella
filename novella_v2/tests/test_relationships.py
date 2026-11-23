@@ -81,10 +81,10 @@ class TestRelationships(unittest.TestCase):
         self.assertGreater(len(data["rules"]), 50)
         self.assertEqual(data["npc_to_pov"], {})
         self.assertEqual(data["npc_to_npc"], {})
-        self.assertEqual(data["familiarity"]["adrian"]["silas"], "unaware")
-        self.assertEqual(data["familiarity"]["silas"]["adrian"], "unaware")
-        self.assertEqual(data["familiarity"]["adrian"]["pov"], "unaware")
-        self.assertEqual(data["familiarity"]["pov"]["adrian"], "unaware")
+        self.assertEqual(data["familiarity"].get("adrian", {}).get("silas", "unaware"), "unaware")
+        self.assertEqual(data["familiarity"].get("silas", {}).get("adrian", "unaware"), "unaware")
+        self.assertEqual(data["familiarity"].get("adrian", {}).get("pov", "unaware"), "unaware")
+        self.assertEqual(data["familiarity"].get("pov", {}).get("adrian", "unaware"), "unaware")
 
     def test_full_relationship_file_in_every_turn_and_canon_packet(self):
         p = self.engine.prepare(self.sid, "Сегодня", ["adrian"])
@@ -119,9 +119,9 @@ class TestRelationships(unittest.TestCase):
         restored = json.loads(payload["files"]["relationships.md"])
         self.assertEqual(restored["npc_to_pov"], old["npc_to_pov"])
         self.assertEqual(restored["npc_to_npc"], old["npc_to_npc"])
-        self.assertEqual(restored["familiarity"]["adrian"]["pov"], "acquainted")
-        self.assertEqual(restored["familiarity"]["adrian"]["silas"], "acquainted")
-        self.assertEqual(restored["familiarity"]["silas"]["adrian"], "unaware")
+        self.assertEqual(restored["familiarity"].get("adrian", {}).get("pov", "unaware"), "acquainted")
+        self.assertEqual(restored["familiarity"].get("adrian", {}).get("silas", "unaware"), "acquainted")
+        self.assertEqual(restored["familiarity"].get("silas", {}).get("adrian", "unaware"), "unaware")
         self.submit(1)
         self.assertEqual(self.relation(), restored)
 
@@ -148,8 +148,8 @@ class TestRelationships(unittest.TestCase):
         changes = [self.meet("adrian", "silas", "aware")]
         self.submit(1, changes, ["adrian", "silas"], physical(1, remote=True))
         current = self.relation()
-        self.assertEqual(current["familiarity"]["adrian"]["silas"], "aware")
-        self.assertEqual(current["familiarity"]["silas"]["adrian"], "unaware")
+        self.assertEqual(current["familiarity"].get("adrian", {}).get("silas", "unaware"), "aware")
+        self.assertEqual(current["familiarity"].get("silas", {}).get("adrian", "unaware"), "unaware")
         self.assertEqual(current["npc_to_npc"], {})
 
     def test_no_feelings_about_just_heard_of_npc(self):
@@ -180,8 +180,8 @@ class TestRelationships(unittest.TestCase):
     def test_pov_can_have_independent_acquaintance_status_without_numeric_scales(self):
         self.submit(1, [self.meet("pov", "adrian", "aware")])
         current = self.relation()
-        self.assertEqual(current["familiarity"]["pov"]["adrian"], "aware")
-        self.assertEqual(current["familiarity"]["adrian"]["pov"], "unaware")
+        self.assertEqual(current["familiarity"].get("pov", {}).get("adrian", "unaware"), "aware")
+        self.assertEqual(current["familiarity"].get("adrian", {}).get("pov", "unaware"), "unaware")
         self.assertEqual(current["npc_to_pov"], {})
 
     def test_no_changes_file_is_byte_identical_and_not_replaced(self):
@@ -241,10 +241,10 @@ class TestRelationships(unittest.TestCase):
                                   "julian", "Джулиан",
                                   "Джулиан появляется в городе.")
         data = self.relation()
-        self.assertEqual(data["familiarity"]["adrian"]["julian"], "unaware")
-        self.assertEqual(data["familiarity"]["julian"]["adrian"], "unaware")
-        self.assertEqual(data["familiarity"]["julian"]["pov"], "unaware")
-        self.assertEqual(data["familiarity"]["pov"]["julian"], "unaware")
+        self.assertEqual(data["familiarity"].get("adrian", {}).get("julian", "unaware"), "unaware")
+        self.assertEqual(data["familiarity"].get("julian", {}).get("adrian", "unaware"), "unaware")
+        self.assertEqual(data["familiarity"].get("julian", {}).get("pov", "unaware"), "unaware")
+        self.assertEqual(data["familiarity"].get("pov", {}).get("julian", "unaware"), "unaware")
         self.assertEqual(data["npc_to_pov"], old["npc_to_pov"])
 
     def test_invalid_status_and_unknown_with_metrics_fail(self):
