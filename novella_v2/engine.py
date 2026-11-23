@@ -897,7 +897,8 @@ class Engine:
                              " · " + str(state["datetime"] or "дата не задана") + "\n" +
                              "Участники: " + ", ".join(names) + "\n" +
                              text.strip() + "\n")
-            files["timeline.md"] = timeline
+            if timeline != before_timeline:
+                files["timeline.md"] = timeline
             older_scenes = _recent_turns(path, 3)
             warnings = (["SCENE_NEAR_DUPLICATE"]
                         if _near_duplicate(data["narration"], older_scenes) else [])
