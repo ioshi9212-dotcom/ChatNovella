@@ -138,10 +138,12 @@ class TestV2Http(unittest.TestCase):
                 "text": "Адриан назначил встречу на завтра.",
                 "participants": ["adrian", "pov"],
             }],
-            "relations": [{
-                "source": "adrian", "target": "pov", "metric": "доверие",
-                "value": 60, "reason": "Открытый разговор",
-            }],
+            "relations": [
+                {"source": "adrian", "target": "pov", "status": "acquainted",
+                 "reason": "Первая встреча"},
+                {"source": "adrian", "target": "pov", "metric": "доверие",
+                 "value": 60, "reason": "Открытый разговор"},
+            ],
         }
         r = self.client.post(f"/v2/novels/{sid}/turns", headers=self.auth, json=body)
         self.assertEqual(r.status_code, 200, r.text)
