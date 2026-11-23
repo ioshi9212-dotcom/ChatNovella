@@ -223,6 +223,61 @@ def _archived_turn(path: Path, request_id: str) -> dict | None:
     return None
 
 
+# The recent response cache stays small. A fixed-size Bloom filter prevents
+# reading the full scene archive for the common case of a fresh request ID.
+# For a possible old repeat, search the authoritative archive and compare its
+# exact saved request hash. False positives cost a lookup, never data loss.
+RECENT_REQUESTS = 96
+REQUEST_FILTER_BYTES = 8192
+
+
+def _request_bits(request_id: str) -> list[int]:
+    raw = sha256(request_id.encode("utf-8")).digest()
+    width = REQUEST_FILTER_BYTES * 8
+    return [int.from_bytes(raw[n:n + 4], "big") % width for n in (0, 4, 8)]
+
+
+def _seen_request(meta: dict, request_id: str) -> bool:
+    if request_id in meta.get("requests", {}):
+        return True
+    raw = meta.get("request_filter")
+    if not raw:
+        # Legacy sessions retained every request in the old metadata map.
+        return False
+    bitmap = base64.b64decode(raw)
+    return all(bitmap[pos // 8] & (1 << (pos % 8))
+               for pos in _request_bits(request_id))
+
+
+def _remember_request(new: dict, request_id: str) -> None:
+    raw = new.get("request_filter")
+    if raw:
+        bitmap = bytearray(base64.b64decode(raw))
+    else:
+        bitmap = bytearray(REQUEST_FILTER_BYTES)
+        for prior in new.get("requests", {}):
+            for pos in _request_bits(prior):
+                bitmap[pos // 8] |= 1 << (pos % 8)
+    for pos in _request_bits(request_id):
+        bitmap[pos // 8] |= 1 << (pos % 8)
+    new["request_filter"] = base64.b64encode(bitmap).decode("ascii")
+    cache = new["requests"]
+    if len(cache) > RECENT_REQUESTS:
+        newest = sorted(cache, key=lambda k: cache[k]["result"]["turn"],
+                        reverse=True)[:RECENT_REQUESTS]
+        new["requests"] = {key: cache[key] for key in newest}
+
+
+def _archived_request(path: Path, request_id: str) -> tuple[dict | None, bool]:
+    reverted = False
+    for row in _backward_history(path / "history.jsonl"):
+        if row["kind"] == "rollback" and row["reverts"] == request_id:
+            reverted = True
+        if row["kind"] == "turn" and row["request_id"] == request_id:
+            return row, reverted
+    return None, False
+
+
 def _append_descriptor(path: Path, text: str) -> dict:
     """Commit an append by size+tail fingerprint, not by copying all old turns."""
     data = text.encode("utf-8")
@@ -594,19 +649,19 @@ class Engine:
         need(request_id is None or (isinstance(request_id, str) and
              1 <= len(request_id) <= 100), "REQUEST_ID", "Invalid request id")
         with self._locked(sid) as (path, meta):
-            if kind == "turn" and request_id is not None and request_id in meta["requests"]:
-                receipt = meta["requests"][request_id]
-                need(not receipt.get("reverted"), "REQUEST_REUSED",
-                     "This operation was rolled back; choose a fresh request id")
-                old = _archived_turn(path, request_id)
-                need(old is not None, "HISTORY_INTEGRITY",
-                     "Committed request is missing from the scene archive")
-                need(old["reader_text"] == reader_text, "REQUEST_REUSED",
-                     "Request id cannot be reused for different reader input")
-                return {"already_committed_duplicate": True, "saved": True,
-                        "request_id": request_id, "version": meta["version"],
-                        "turn": old["turn"], "narration": old["narration"],
-                        "instruction": "Return the saved scene. Do not prepare or generate another."}
+            if kind == "turn" and request_id is not None and _seen_request(meta, request_id):
+                old, reverted = _archived_request(path, request_id)
+                if old is not None:
+                    need(not reverted and
+                         not meta.get("requests", {}).get(request_id, {}).get("reverted"),
+                         "REQUEST_REUSED",
+                         "This operation was rolled back; choose a fresh request id")
+                    need(old["reader_text"] == reader_text, "REQUEST_REUSED",
+                         "Request id cannot be reused for different reader input")
+                    return {"already_committed_duplicate": True, "saved": True,
+                            "request_id": request_id, "version": meta["version"],
+                            "turn": old["turn"], "narration": old["narration"],
+                            "instruction": "Return the saved scene. Do not prepare or generate another."}
             if kind != "canon":
                 need(meta["approved"], "NOT_APPROVED", "Confirm canon before writing")
                 need((kind == "audit") == bool(meta["audit_due"]), "AUDIT_GATE",
@@ -761,12 +816,20 @@ class Engine:
             if prior:
                 need(prior["hash"] == request_hash and not prior.get("reverted"),
                      "REQUEST_REUSED", "Request id was reused or rolled back")
-                # Avoid copying every full scene into metadata on each turn.
-                # The full narration lives only in the durable history archive.
                 stored = _archived_turn(path, req)
                 need(stored is not None, "HISTORY_INTEGRITY",
                      "Saved request is missing from the scene archive")
                 return {**prior["result"], "narration": stored["narration"]}
+            if _seen_request(meta, req):
+                old, reverted = _archived_request(path, req)
+                if old is not None:
+                    need(not reverted and old.get("request_hash") == request_hash,
+                         "REQUEST_REUSED",
+                         "Old request id was reused, changed, or rolled back")
+                    result = old.get("saved_result")
+                    need(isinstance(result, dict), "REQUEST_REUSED",
+                         "Old legacy request cannot be safely replayed")
+                    return {**result, "narration": old["narration"]}
             self._version(meta, data["expected_version"])
             need(meta["approved"] and not meta["audit_due"], "AUDIT_GATE",
                  "Approval or audit required")
@@ -923,6 +986,9 @@ class Engine:
             new["requests"][req] = {"hash": request_hash,
                                     "result": {k: v for k, v in result.items()
                                                if k != "narration"}}
+            record["request_hash"] = request_hash
+            record["saved_result"] = new["requests"][req]["result"]
+            _remember_request(new, req)
             self._write(path, meta, files, new,
                         appends={"history.jsonl": dump(record) + "\n"})
             return result
