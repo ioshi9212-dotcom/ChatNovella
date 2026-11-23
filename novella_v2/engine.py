@@ -434,6 +434,9 @@ class Engine:
                 files["characters/" + name + ".md"] for name in sorted(names)))
             meta = {"session_id": sid, "version": 1, "turn": 0, "approved": False,
                     "canon_hash": canon_hash, "original_hash": digest(original),
+                    "novel_hash": digest(novel),
+                    "card_hashes": {name: digest(files["characters/" + name + ".md"])
+                                    for name in set(names) | ({"pov"} if partitions["pov"] else set())},
                     "segments": deepcopy(blocks), "packet": None, "audit_due": 0,
                     "requests": {}, "last_undo": None}
             atomic(tmp / "system/meta.json", dump(meta))
@@ -455,6 +458,12 @@ class Engine:
             need(not meta["approved"] and isinstance(confirmation, str) and
                  bool(confirmation.strip()) and canon_hash == meta["canon_hash"],
                  "APPROVAL_REQUIRED", "Approve exact canon checksum explicitly")
+            need(digest(self._read(path, "original.txt")) == meta["original_hash"] and
+                 digest(self._read(path, "novel.md")) == meta["novel_hash"],
+                 "CANON_CHANGED", "Original or main questionnaire changed before approval")
+            for name, checksum in meta["card_hashes"].items():
+                need(digest(self._read(path, "characters/" + name + ".md")) == checksum,
+                     "CANON_CHANGED", "A character card changed before approval")
             new = {**meta, "approved": True, "version": meta["version"] + 1,
                    "approval": confirmation}
             self._write(path, meta, {}, new)
@@ -494,7 +503,10 @@ class Engine:
             files = {"novel.md": novel, "characters/" + name + ".md":
                      CHARACTER_RULE + established_text,
                      "knowledge/" + name + ".md": "# Новые знания: " + name + "\n"}
-            new = {**meta, "version": meta["version"] + 1, "packet": None}
+            new = {**meta, "version": meta["version"] + 1, "packet": None,
+                   "novel_hash": digest(novel),
+                   "card_hashes": {**meta.get("card_hashes", {}),
+                                   name: digest(files["characters/" + name + ".md"])}}
             self._write(path, meta, files, new)
             return {"name": name, "version": new["version"], "added": True}
 
@@ -512,7 +524,8 @@ class Engine:
         return active
 
     def prepare(self, sid: str, reader_text: str = "",
-                participants: list[str] | None = None, kind: str = "turn") -> dict:
+                participants: list[str] | None = None, kind: str = "turn",
+                request_id: str | None = None) -> dict:
         need(kind in ("turn", "audit", "canon"), "CONTEXT_KIND", "Unsupported context kind")
         need(isinstance(reader_text, str), "INPUT_TEXT", "Reader input must be text")
         with self._locked(sid) as (path, meta):
