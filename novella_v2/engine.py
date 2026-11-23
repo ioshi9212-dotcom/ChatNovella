@@ -21,6 +21,8 @@ import shutil
 import tempfile
 from typing import Any
 
+from . import relations as relationship_store
+
 CHUNK_SIZE = 36_000  # Unicode code points, not UTF-8 bytes
 SESSION = re.compile(r"^NV2_[0-9a-f]{24}$")
 IDENT = re.compile(r"^[a-z][a-z0-9_]{1,49}$")
@@ -152,25 +154,10 @@ def validate_state(value: Any, characters: set[str], expected_turn: int) -> dict
 
 
 def validate_relations(value: Any, characters: set[str]) -> dict:
-    need(isinstance(value, dict) and set(value) == {"npc_to_pov", "npc_to_npc"},
-         "RELATION_FIELDS", "Relations require only npc_to_pov and npc_to_npc")
-    result = deepcopy(value)
-    need(isinstance(result["npc_to_pov"], dict) and isinstance(result["npc_to_npc"], dict),
-         "RELATION_FIELDS", "Relationship sections must be mappings")
-    for source, dimensions in result["npc_to_pov"].items():
-        need(source in characters and isinstance(dimensions, dict), "RELATION_OWNER",
-             "Unknown relationship owner")
-        for name, score in dimensions.items():
-            need(isinstance(name, str) and bool(name.strip()) and type(score) is int and
-                 0 <= score <= 100, "RELATION_SCORE", "Numeric relation must be 0..100")
-    for source, targets in result["npc_to_npc"].items():
-        need(source in characters and isinstance(targets, dict), "RELATION_OWNER",
-             "Unknown relationship owner")
-        for target, description in targets.items():
-            need(target in characters and target != source and isinstance(description, str)
-                 and len(description) <= 450, "RELATION_DESCRIPTION",
-                 "NPC to NPC relations use short descriptions")
-    return result
+    try:
+        return relationship_store.normalize(value, characters)
+    except relationship_store.RelationProblem as exc:
+        raise EngineError("RELATION_INVALID", str(exc), 422) from exc
 
 
 def empty_actor() -> dict:
@@ -525,9 +512,13 @@ class Engine:
             insert_at = len(novel) if boundary < 0 else boundary
             novel = (novel[:insert_at].rstrip("\n") + "\n- " + name + " — " +
                      display.strip() + "\n" + novel[insert_at:])
+            old_rel = validate_relations(
+                json.loads(self._read(path, "relationships.md")), self._cast(path))
+            new_rel = validate_relations(old_rel, self._cast(path) | {name})
             files = {"novel.md": novel, "characters/" + name + ".md":
                      CHARACTER_RULE + established_text,
-                     "knowledge/" + name + ".md": "# Новые знания: " + name + "\n"}
+                     "knowledge/" + name + ".md": "# Новые знания: " + name + "\n",
+                     "relationships.md": dump(new_rel)}
             new = {**meta, "version": meta["version"] + 1, "packet": None,
                    "novel_hash": digest(novel),
                    "card_hashes": {**meta.get("card_hashes", {}),
@@ -648,6 +639,10 @@ class Engine:
                          "state.md": self._read(path, "state.md"),
                          "relationships.md": self._read(path, "relationships.md"),
                          "timeline.md": self._read(path, "timeline.md")}
+            # Normalize legacy two-section relationships for a safe transition.
+            # New files always include a short rule and directed familiarity.
+            files["relationships.md"] = dump(validate_relations(
+                json.loads(files["relationships.md"]), cast))
             if meta.get("novel_hash"):
                 need(digest(files["novel.md"]) == meta["novel_hash"],
                      "CANON_CHANGED", "Main questionnaire changed outside the engine")
@@ -728,29 +723,12 @@ class Engine:
         return p
 
     @staticmethod
-    def _apply_relations(current: dict, changes: list[dict], cast: set[str]) -> dict:
-        need(isinstance(changes, list), "RELATION_CHANGES", "Relations must be a list")
-        result = deepcopy(current)
-        for item in changes:
-            need(isinstance(item, dict) and set(item) ==
-                 {"source", "target", "metric", "value", "reason"},
-                 "RELATION_CHANGE_FIELDS", "Relation change has five fixed fields")
-            source, target = item["source"], item["target"]
-            need(source in cast and (target == "pov" or target in cast - {source})
-                 and isinstance(item["reason"], str) and bool(item["reason"].strip()),
-                 "RELATION_CHANGE", "Relationship owner/target or reason invalid")
-            if target == "pov":
-                metric, value = item["metric"], item["value"]
-                need(isinstance(metric, str) and bool(metric.strip()) and
-                     type(value) is int and 0 <= value <= 100,
-                     "RELATION_SCORE", "Numeric value must be 0..100")
-                result["npc_to_pov"].setdefault(source, {})[metric] = value
-            else:
-                need(item["metric"] is None and isinstance(item["value"], str) and
-                     len(item["value"]) <= 450, "RELATION_DESCRIPTION",
-                     "NPC to NPC relation must be descriptive text")
-                result["npc_to_npc"].setdefault(source, {})[target] = item["value"]
-        return validate_relations(result, cast)
+    def _apply_relations(current: dict, changes: list[dict], cast: set[str],
+                         participants: set[str]) -> dict:
+        try:
+            return relationship_store.update(current, changes, cast, participants)
+        except relationship_store.RelationProblem as exc:
+            raise EngineError("RELATION_INVALID", str(exc), 422) from exc
 
     def commit(self, sid: str, data: dict) -> dict:
         required = {"request_id", "expected_version", "packet_id", "chunk_hashes",
@@ -813,8 +791,11 @@ class Engine:
                 if isinstance(change, dict):
                     need(change.get("source") in used, "UNLOADED_RELATION_OWNER",
                          "Load the source character before changing their relationships")
-            after_rel = dump(self._apply_relations(json.loads(before_rel), data["relations"], cast))
-            files = {"state.md": dump(state), "relationships.md": after_rel}
+            after_rel = dump(self._apply_relations(
+                json.loads(before_rel), data["relations"], cast, set(used)))
+            files = {"state.md": dump(state)}
+            if after_rel != before_rel:
+                files["relationships.md"] = after_rel
             before = {"state.md": self._read(path, "state.md"),
                       "relationships.md": before_rel, "timeline.md": before_timeline}
             need(isinstance(data["knowledge"], list), "KNOWLEDGE_TYPE",
