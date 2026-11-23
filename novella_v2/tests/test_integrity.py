@@ -282,8 +282,14 @@ class TestV2Integrity(unittest.TestCase):
             self.engine.commit(self.sid, data)
 
     def test_relations_are_directional_and_stable(self):
-        p, _ = self.packet()
-        data = self.turn(p, relations=[
+        p, _ = self.packet(participants=["adrian", "silas"])
+        present = frame(1)
+        present["remote"] = {"silas": "Наблюдает за разговором в отражении"}
+        data = self.turn(p, participants=["adrian", "silas"], state=present, relations=[
+            {"source": "adrian", "target": "pov",
+             "status": "acquainted", "reason": "Лично знакомы"},
+            {"source": "adrian", "target": "silas",
+             "status": "acquainted", "reason": "Лично знакомы"},
             {"source": "adrian", "target": "pov", "metric": "доверие",
              "value": 20, "reason": "Сомнение"},
             {"source": "adrian", "target": "silas", "metric": None,
