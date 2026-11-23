@@ -208,6 +208,85 @@ class TestV2Http(unittest.TestCase):
         self.assertEqual(self.client.get(
             f"/v2/novels/{sid}/history", headers=self.auth).json()["scenes"][0]["narration"], scene)
 
+    def test_http_unfinished_arc_survives_turns_and_closes_without_duplication(self):
+        import json
+        sid = self.start_novel()
+        first, raw = self.prepared(sid, reader="Где письмо?")
+        self.assertEqual(json.loads(raw)["files"]["open_threads.md"],
+                         "# Незавершённые линии\n")
+        scene = "**Адриан** — Я потерял письмо."
+        body = {
+            "request_id": "arc-api-1", "expected_version": first["version"],
+            "packet_id": first["packet_id"], "chunk_hashes": first["chunk_hashes"],
+            "reader_text": "Где письмо?", "narration": scene,
+            "participants": ["adrian"], "state": state(1),
+            "knowledge": [], "events": [], "relations": [],
+            "thread_updates": [{
+                "id": "lost_letter", "title": "Пропавшее письмо",
+                "status": "active", "note": "Адриан признался в пропаже.",
+                "source": "Я потерял письмо."
+            }]
+        }
+        saved = self.client.post(f"/v2/novels/{sid}/turns",
+                                 headers=self.auth, json=body)
+        self.assertEqual(saved.status_code, 200, saved.text)
+        second, data = self.prepared(sid, reader="И кто взял?")
+        self.assertIn("Пропавшее письмо",
+                      json.loads(data)["files"]["open_threads.md"])
+        body.update({
+            "request_id": "arc-api-2", "expected_version": second["version"],
+            "packet_id": second["packet_id"],
+            "chunk_hashes": second["chunk_hashes"],
+            "reader_text": "И кто взял?",
+            "narration": "**Адриан** — Письмо забрал Марк.",
+            "state": state(2),
+            "thread_updates": [{
+                "id": "lost_letter", "title": "Пропавшее письмо",
+                "status": "closed", "note": "Адриан выяснил, кто взял письмо.",
+                "source": "Письмо забрал Марк."
+            }]
+        })
+        finished = self.client.post(f"/v2/novels/{sid}/turns",
+                                    headers=self.auth, json=body)
+        self.assertEqual(finished.status_code, 200, finished.text)
+        _, data = self.prepared(sid, reader="Пойдём гулять")
+        self.assertEqual(json.loads(data)["files"]["open_threads.md"],
+                         "# Незавершённые линии\n")
+        history = self.client.get(f"/v2/novels/{sid}/history",
+                                  headers=self.auth).json()["scenes"]
+        self.assertEqual(len(history), 2)
+        self.assertEqual(history[1]["thread_updates"][0]["status"], "closed")
+
+    def test_http_initial_arc_requires_literal_author_source(self):
+        original = "Мир.\nАдриан ищет брата.\n"
+        r = self.client.post("/v2/novels", headers=self.auth, json={
+            "original": original,
+            "blocks": [{"start": 0, "end": len(original), "target": "novel"}],
+            "names": {"adrian": "Адриан"},
+            "initial_threads": [{
+                "id": "search_brother", "title": "Поиски брата",
+                "status": "not_started", "note": "Брат ещё не найден.",
+                "source": "Адриан ищет брата."
+            }]
+        })
+        self.assertEqual(r.status_code, 200, r.text)
+        sid = r.json()["session_id"]
+        packet, raw = self.prepared(sid, reader="", kind="canon")
+        self.assertIn("Поиски брата",
+                      __import__("json").loads(raw)["files"]["open_threads.md"])
+        self.assertGreater(packet["chunk_count"], 0)
+        bad = self.client.post("/v2/novels", headers=self.auth, json={
+            "original": original,
+            "blocks": [{"start": 0, "end": len(original), "target": "novel"}],
+            "names": {"adrian": "Адриан"},
+            "initial_threads": [{
+                "id": "search_brother", "title": "Поиски брата",
+                "status": "not_started", "note": "Неизвестное предсказание",
+                "source": "Этой строки в анкете не было."
+            }]
+        })
+        self.assertEqual(bad.status_code, 422)
+
     def test_http_invalid_session_returns_client_error(self):
         self.assertEqual(self.client.get("/v2/novels/INVALID", headers=self.auth).status_code, 422)
 
