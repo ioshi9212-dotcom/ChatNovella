@@ -112,6 +112,12 @@ class TestRelationships(unittest.TestCase):
         old = {"npc_to_pov": {"adrian": {"любовь": 100}},
                "npc_to_npc": {"adrian": {"silas": "Считает соперником"}}}
         atomic(self.path(), dump(old))
+        # Emulate an existing session created before relationship checksums.
+        meta_path = self.engine.root / self.sid / "system/meta.json"
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        meta.pop("relationship_file_hash", None)
+        meta.pop("relation_rule_hash", None)
+        atomic(meta_path, dump(meta))
         p = self.engine.prepare(self.sid, "Сегодня", ["adrian"])
         payload = json.loads("".join(self.engine.read_chunk(
             self.sid, p["packet_id"], i)["content"]
