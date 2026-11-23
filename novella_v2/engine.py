@@ -8,6 +8,7 @@ from __future__ import annotations
 import base64
 from contextlib import contextmanager
 from copy import deepcopy
+from datetime import datetime
 from hashlib import sha256
 import fcntl
 import json
@@ -125,6 +126,11 @@ def validate_state(value: Any, characters: set[str], expected_turn: int) -> dict
          "STATE_DATE", "Invalid game date/time")
     need(isinstance(value["location"], str) and 0 < len(value["location"]) <= 240 and
          not LEAK_RE.search(value["location"]), "STATE_LOCATION", "Invalid scene location")
+    if value["datetime"] is not None:
+        try:
+            datetime.fromisoformat(value["datetime"])
+        except ValueError:
+            raise EngineError("STATE_DATE", "Game datetime must be ISO 8601", 422)
     actor(value["pov"])
     present, remote = value["present"], value["remote"]
     need(isinstance(present, dict) and isinstance(remote, dict),
@@ -252,7 +258,20 @@ class Engine:
             if name != "pov":
                 slug(name)
         need(isinstance(blocks, list) and bool(blocks), "SOURCE_BLOCKS",
-             "Exact source offsets are required")
+             "Exact source positions or unique text anchors are required")
+        if all(isinstance(row, dict) and set(row) == {"anchor", "target"}
+               for row in blocks):
+            offsets = []
+            for row in blocks:
+                anchor = row["anchor"]
+                need(isinstance(anchor, str) and bool(anchor) and original.count(anchor) == 1,
+                     "SOURCE_ANCHOR", "Each anchor must occur exactly once in the original")
+                offsets.append(original.index(anchor))
+            need(offsets[0] == 0 and offsets == sorted(set(offsets)),
+                 "SOURCE_ANCHOR", "Anchors must start at character zero and follow source order")
+            blocks = [{"start":offsets[i],
+                       "end":offsets[i + 1] if i + 1 < len(offsets) else len(original),
+                       "target":row["target"]} for i, row in enumerate(blocks)]
         partitions: dict[str, list[str]] = {"novel": [], "pov": []}
         for name in names:
             partitions[name] = []
@@ -514,6 +533,13 @@ class Engine:
             need((set(state["present"]) | set(state["remote"])) <= set(used),
                  "STATE_UNLOADED", "All present/remote characters must be loaded")
             before_state = json.loads(self._read(path, "state.md"))
+            if before_state["datetime"] and state["datetime"]:
+                try:
+                    need(datetime.fromisoformat(state["datetime"]) >=
+                         datetime.fromisoformat(before_state["datetime"]),
+                         "TIME_REVERSED", "World time cannot move backwards")
+                except TypeError:
+                    raise EngineError("TIME_FORMAT", "Use compatible datetime offsets", 422)
             before_rel = self._read(path, "relationships.md")
             before_timeline = self._read(path, "timeline.md")
             after_rel = dump(self._apply_relations(json.loads(before_rel), data["relations"], cast))
