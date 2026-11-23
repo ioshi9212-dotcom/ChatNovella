@@ -107,6 +107,20 @@ class AuditFixes(unittest.TestCase):
         self.assertEqual(rel["familiarity"]["silas"]["pov"], "acquainted")
         self.assertIn("отражение письма", self.filepath("knowledge/silas.md").read_text(encoding="utf-8"))
 
+    def test_old_scene_witness_does_not_learn_after_a_time_jump(self):
+        self.store.commit(self.sid, self.turn(
+            1, people=["adrian", "silas"], state=self.state(1, "remote"),
+            narration="**Сайлас** — Я наблюдаю из отражения."))
+        # He is not in the new scene. Previous remote state alone does
+        # not justify hearing the unrelated conversation after a cut.
+        next_turn = self.turn(
+            2, people=["adrian", "silas"],
+            narration="**Адриан** — Завтра спрячем маску.",
+            knowledge=[{"owner": "silas", "fact": "Маску собираются спрятать",
+                        "source": "Завтра спрячем маску."}])
+        with self.assertRaisesRegex(EngineError, "without actual scene access"):
+            self.store.commit(self.sid, next_turn)
+
     def test_witness_entering_and_exiting_same_turn_needs_literal_proof(self):
         text = "Сайлас вошёл в комнату, услышал рассказ и вышел. **Адриан** — Секрет."
         t = self.turn(1, people=["adrian", "silas"], narration=text,
