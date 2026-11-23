@@ -22,7 +22,7 @@ def main():
     with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
         for name in ("plugin.json", "mcp.json", "skills/chatnovella/SKILL.md"):
             archive.write(source / name, "chatnovella/" + name)
-        archive.write(root / "docs/PLUGIN_INSTRUCTIONS.md",
+        archive.write(root / "docs/lite/INSTRUCTIONS.md",
                       "chatnovella/skills/chatnovella/references/workflow.md")
     with zipfile.ZipFile(output) as archive:
         assert len(archive.namelist()) == 4
