@@ -153,6 +153,8 @@ class TestEngine(unittest.TestCase):
             events=[{"text": "Адриан спросил героиню об отъезде.",
                      "participants": ["adrian", "pov"]}],
             relations=[{"source": "adrian", "target": "pov",
+                        "status": "acquainted", "reason": "Лично разговаривали"},
+                       {"source": "adrian", "target": "pov",
                         "metric": "доверие", "value": 52, "reason": "Разговор"}])
         first = self.engine.commit(self.sid, data)
         self.assertEqual(first, self.engine.commit(self.sid, data))
