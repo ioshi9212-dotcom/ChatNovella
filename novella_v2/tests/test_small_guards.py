@@ -81,6 +81,48 @@ class TestSmallGuards(unittest.TestCase):
         self.assertEqual(third["unread_chunk_indices"], [])
         self.assertEqual(p.stat().st_mtime_ns, timestamp)
 
+    def test_large_packet_resumes_only_unread_chunks_after_repeated_prepare(self):
+        source = "Город. " + "Ж" * 80_000 + "\nАдриан грубый.\n"
+        a = source.index("Адриан")
+        new = self.engine.create(source, [
+            {"start": 0, "end": a, "target": "novel"},
+            {"start": a, "end": len(source), "target": "adrian"},
+        ], {"adrian": "Адриан"})
+        sid = new["session_id"]
+        self.engine.approve(sid, new["version"], new["canon_hash"], "Утверждаю")
+        self.engine.set_opening(sid, self.engine.status(sid)["version"], state(0))
+        first = self.engine.prepare(sid, "Hi", ["adrian"], request_id="large-1")
+        self.assertGreater(first["chunk_count"], 2)
+        part0 = self.engine.read_chunk(sid, first["packet_id"], 0)
+        self.assertEqual(part0["next_chunk_index"], 1)
+        repeated = self.engine.prepare(sid, "Hi", ["adrian"], request_id="large-1")
+        self.assertEqual(repeated["packet_id"], first["packet_id"])
+        self.assertTrue(repeated["reused_pending_packet"])
+        self.assertEqual(repeated["unread_chunk_indices"], list(range(1, first["chunk_count"])))
+        self.assertEqual(repeated["next_chunk_index"], 1)
+        for i in repeated["unread_chunk_indices"]:
+            self.engine.read_chunk(sid, first["packet_id"], i)
+        done = self.engine.prepare(sid, "Hi", ["adrian"], request_id="large-1")
+        self.assertTrue(done["all_chunks_read"])
+        self.assertEqual(done["unread_chunk_indices"], [])
+
+    def test_saved_request_is_returned_even_while_audit_is_due(self):
+        for n in range(1, 16):
+            reader = "ход " + str(n)
+            req = "audit-prep-" + str(n)
+            packet = self.prepare(reader=reader, request_id=req)
+            self.finish(packet)
+            result = self.engine.commit(self.sid, self.payload(
+                packet, n=n, reader=reader, request_id=req))
+        self.assertEqual(result["audit_due"], 15)
+        retry = self.engine.prepare(self.sid, "ход 15", ["adrian"],
+                                    request_id="audit-prep-15")
+        self.assertTrue(retry["already_committed_duplicate"])
+        self.assertEqual(retry["turn"], 15)
+        self.assertEqual(len(self.engine.history(self.sid)), 15)
+        with self.assertRaisesRegex(EngineError, "Audit is required"):
+            self.prepare(reader="ход 16", request_id="audit-prep-16")
+
     def test_new_input_or_new_request_issues_new_packet(self):
         old = self.prepare()
         changed = self.prepare(reader="Другой ввод")
