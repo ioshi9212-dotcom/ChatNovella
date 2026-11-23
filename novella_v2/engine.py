@@ -540,6 +540,11 @@ class Engine:
         return [[str(p), p.stat().st_size, p.stat().st_mtime_ns] for p in sources]
 
     @staticmethod
+    def _packet_stamp(path: Path) -> list[int]:
+        st = (path / "system/packet.json").stat()
+        return [st.st_size, st.st_mtime_ns]
+
+    @staticmethod
     def _manifest(packet: dict, audit_due: int, reused: bool = False) -> dict:
         count = len(packet["hashes"])
         read = set(packet["received"])
@@ -605,7 +610,8 @@ class Engine:
                 pending["kind"] == kind and pending["reader_text"] == reader_text and
                 pending["participants"] == sorted(relevant) and
                 pending.get("request_id") == request_id and
-                pending.get("source_signature") == signature):
+                pending.get("source_signature") == signature and
+                pending.get("packet_stamp") == self._packet_stamp(path)):
                 return self._manifest(pending, meta["audit_due"], reused=True)
             if kind == "canon":
                 files = {"original.txt": self._read(path, "original.txt"),
@@ -655,6 +661,7 @@ class Engine:
                       "hashes": [digest(c) for c in content_chunks], "received": [],
                       "offsets": offsets, "sha256": digest(payload)}
             atomic(path / "system/packet.json", payload)
+            packet["packet_stamp"] = self._packet_stamp(path)
             atomic(path / "system/meta.json", dump({**meta, "packet": packet}))
             return self._manifest(packet, meta["audit_due"])
 
@@ -746,6 +753,8 @@ class Engine:
             need(meta["approved"] and not meta["audit_due"], "AUDIT_GATE",
                  "Approval or audit required")
             packet = self._receipt(meta, data["packet_id"], data["chunk_hashes"], "turn")
+            need(packet.get("packet_stamp") == self._packet_stamp(path),
+                 "PACKET_CHANGED", "Prepared context bytes changed before commit")
             need(packet.get("request_id") is None or
                  packet["request_id"] == req, "REQUEST_ID_MISMATCH",
                  "Prepared request ID and committed request ID differ")
@@ -885,7 +894,9 @@ class Engine:
               corrections: dict[str, dict] | None = None) -> dict:
         with self._locked(sid) as (path, meta):
             self._version(meta, expected_version)
-            self._receipt(meta, packet_id, chunk_hashes, "audit")
+            packet = self._receipt(meta, packet_id, chunk_hashes, "audit")
+            need(packet.get("packet_stamp") == self._packet_stamp(path),
+                 "PACKET_CHANGED", "Prepared audit context bytes changed")
             need(meta["audit_due"] in (15, 60), "AUDIT_NOT_DUE", "No audit due")
             required = {"continuity", "state", "knowledge", "timeline", "relationships"}
             if meta["audit_due"] == 60:
