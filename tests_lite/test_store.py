@@ -397,6 +397,89 @@ class StoreTests(unittest.TestCase):
             self.store.commit(self.sid,**self.payload(narration=quote,knowledge=[item]))
         self.assertEqual(len(parse_document(self.read('knowledge/NPC_001.md'))),1)
 
+    def test_distinct_refutation_links_survive_save_retry_and_audit(self):
+        old=[]
+        for source_id,quote in [('NPC_002','Джун написал: код сейфа 314.'),
+                                ('NPC_003','Мики написал: код сейфа 314.')]:
+            old.append(dict(npc_id='NPC_001',fact='Код сейфа 314.',status='mistaken',
+                            source_kind='message',source_ids=[source_id],
+                            source=quote,evidence=quote))
+        self.store.commit(self.sid,**self.payload(
+            narration=' '.join(entry['evidence'] for entry in old),knowledge=old))
+        quote='Джун сказал: прежний код сейфа больше не действует.'
+        refutation=dict(npc_id='NPC_001',fact='Код 314 больше не действует.',status='refuted',
+                        source_kind='told',source_ids=['NPC_002'],
+                        source='Джун лично сообщил об изменении кода.',evidence=quote)
+        data=self.payload(narration=quote,knowledge=[dict(refutation,supersedes=0),
+                                                    dict(refutation,supersedes=1)])
+        saved=self.store.commit(self.sid,**data)
+        self.assertEqual(saved['knowledge_written'],2)
+        self.assertEqual(self.store.commit(self.sid,**data),saved)
+        entries=parse_document(self.read('knowledge/NPC_001.md'))
+        self.assertEqual([row['supersedes'] for row in entries],[None,None,0,1])
+        with self.assertRaisesRegex(Error,'Duplicate personal knowledge'):
+            self.store.commit(self.sid,**self.payload(narration=quote,
+                knowledge=[dict(refutation,supersedes=1)]))
+        for turn in range(3,16):
+            self.store.commit(self.sid,**self.payload())
+        self.audit()
+        self.assertEqual(parse_document(self.read('knowledge/NPC_001.md')),entries)
+
+    def test_next_memory_append_keeps_audited_format_and_all_sources(self):
+        for turn in range(1,16):
+            quote=f'Рэй получил письмо номер {turn}.'
+            item=dict(npc_id='NPC_001',fact=f'Содержание письма номер {turn}.',status='knows',
+                      source_kind='message',source_ids=['NPC_002'],
+                      source='Личное письмо от Джуна.',evidence=quote)
+            self.store.commit(self.sid,**self.payload(narration=quote,knowledge=[item]))
+        path=self.store.path(self.sid)/'knowledge/NPC_001.md'
+        entries=parse_document(self.read('knowledge/NPC_001.md'))
+        # A legacy file starts in the verbose pre-audit representation.
+        path.write_text(document('Приобретённые знания',entries),encoding='utf-8')
+        verbose=self.read('knowledge/NPC_001.md')
+        history=self.read('history.jsonl')
+        self.audit()
+        compacted=self.read('knowledge/NPC_001.md')
+        self.assertLess(len(compacted),len(verbose))
+        self.assertEqual(self.read('history.jsonl'),history)
+        quote='Рэй получил ещё одно отдельное письмо.'
+        new=dict(npc_id='NPC_001',fact='Содержание нового письма.',status='knows',
+                 source_kind='message',source_ids=['NPC_002'],
+                 source='Новое личное письмо от Джуна.',evidence=quote)
+        self.store.commit(self.sid,**self.payload(narration=quote,knowledge=[new]))
+        after=self.read('knowledge/NPC_001.md')
+        rows=parse_document(after)
+        self.assertEqual(rows[:-1],entries)
+        self.assertEqual(rows[-1]['fact'],new['fact'])
+        self.assertEqual(rows[-1]['turn'],16)
+        self.assertEqual(len(rows),16)
+        self.assertLess(len(after),len(document('Приобретённые знания',rows)))
+        self.assertEqual(compact_knowledge(after),(after,0))
+        self.assertTrue(self.read('history.jsonl').startswith(history))
+
+    def test_current_memory_loss_symptoms_belong_in_physical_state(self):
+        symptom='После травмы головы не помнит своего имени.'
+        actor={**ACTOR,'physical':'Амнезия: не помнит своего имени.'}
+        self.store.commit(self.sid,**self.payload(state_patch={
+            'pov':{'physical':symptom},'present':{'NPC_001':actor}}))
+        current=parse_document(self.read('state.md'))
+        self.assertEqual(current['pov']['physical'],symptom)
+        self.assertEqual(current['present']['NPC_001']['physical'],actor['physical'])
+        self.assertEqual(parse_document(self.read('knowledge/POV_001.md')),[])
+
+    def test_memory_loss_exception_does_not_allow_private_knowledge(self):
+        cases=[
+            {'pov':{'physical':'После травмы головы не помнит имени, но знает код сейфа.'}},
+            {'pov':{'physical':'Амнезия: не помнит секретный код сейфа.'}},
+            {'present':{'NPC_001':{**ACTOR,'physical':'Амнезия: Рэй увидел скрытую татуировку.'}}},
+            {'objects':['Амнезия: Рэй не помнит скрытый код сейфа.']},
+            {'pov':{'physical':'Не помнит секретный код сейфа.'}},
+        ]
+        for change in cases:
+            with self.subTest(change=change),self.assertRaisesRegex(Error,'knowledge found'):
+                self.store.commit(self.sid,**self.payload(state_patch=change))
+        self.assertEqual(self.store.status(self.sid)['turn'],0)
+
     def test_pov_acquired_knowledge_has_own_file_and_is_not_scene_state(self):
         quote='Рэй вслух назвал Рине пароль от сейфа.'
         entry=dict(npc_id='POV_001',fact='Пароль от сейфа: тридцать два.',status='knows',

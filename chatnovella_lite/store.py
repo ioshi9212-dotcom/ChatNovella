@@ -33,6 +33,16 @@ _STATE_KNOWLEDGE = re.compile(
     r'помнит|помнят|помнил(?:а|и)?|известно\s+(?:ему|ей|им)|'
     r'осведомл[её]н(?:а|ы)?)\b'
 )
+# A current memory-loss symptom belongs in physical state. This narrow
+# exception does not exempt other epistemic assertions in the same text.
+_MEMORY_CONDITION = re.compile(
+    r'(?iu)\b(?:амнези\w*|сотрясени\w*|травм\w*\s+голов\w*|'
+    r'удар\w*\s+голов\w*|потер\w*\s+памяти)\b'
+)
+_MEMORY_LOSS = re.compile(
+    r'(?iu)\bне\s+помн(?:ит|ят)\s+(?:сво(?:его|е|ё)\s+им(?:ени|я)|'
+    r'собственного\s+имени|себя|кто\s+(?:он|она|они))\b'
+)
 
 def norm(text):
     return ' '.join(str(text).casefold().replace('ё', 'е').split())
@@ -43,7 +53,10 @@ def check_state_patch_scope(patch):
         raise Error('state_patch must be an object')
     def scan(value, field):
         if isinstance(value, str):
-            if _STATE_KNOWLEDGE.search(value):
+            text=value
+            if field.endswith('.physical') and _MEMORY_CONDITION.search(text):
+                text=_MEMORY_LOSS.sub('',text)
+            if _STATE_KNOWLEDGE.search(text):
                 raise Error(f'NPC knowledge found in state_patch.{field}; use knowledge for its owner ID')
         elif isinstance(value, list):
             for item in value: scan(item, field)
@@ -77,6 +90,10 @@ def compact_json(value):
             for row in value) + '\n]'
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
 
+def knowledge_document(entries):
+    """Use the audit's compact representation for ordinary memory appends too."""
+    return '# Приобретённые знания\n\n```json\n' + compact_json(entries) + '\n```\n'
+
 def compact_knowledge(text):
     """Preserve all distinct records and all sources, statuses and acquisition turns.
 
@@ -95,7 +112,7 @@ def compact_knowledge(text):
         else:
             entries.append(row)
             seen.add(key)
-    result = '# Приобретённые знания\n\n```json\n' + compact_json(entries) + '\n```\n'
+    result = knowledge_document(entries)
     if parse_document(result) != entries:
         raise Error('Memory compaction invariant failed')
     return result, duplicates
@@ -576,13 +593,15 @@ class Store:
                 old=files.get(name,(path/name).read_bytes().decode('utf-8') if (path/name).exists() else document('Приобретённые знания',[]))
                 entries=parse_document(old)
                 key=(norm(entry['fact']),entry['status'],entry['source_kind'],
-                     tuple(entry['source_ids']),norm(entry['source']),norm(entry['evidence']))
+                     tuple(entry['source_ids']),norm(entry['source']),norm(entry['evidence']),
+                     entry['supersedes'])
                 if any((norm(row['fact']),row['status'],row['source_kind'],
-                        tuple(row['source_ids']),norm(row['source']),norm(row['evidence']))==key for row in entries):
+                        tuple(row['source_ids']),norm(row['source']),norm(row['evidence']),
+                        row.get('supersedes'))==key for row in entries):
                     raise Error(f'Duplicate personal knowledge for {cid}; do not save the same acquisition twice')
                 if entry['supersedes'] is not None and not 0<=entry['supersedes']<len(entries): raise Error('Invalid superseded knowledge index')
                 entries.append({**entry,'turn':turn,'date':state['datetime']})
-                files[name]=document('Приобретённые знания',entries)
+                files[name]=knowledge_document(entries)
             record={'kind':'turn','turn':turn,'version':meta['version']+1,**{k:v for k,v in data.items() if k not in ('expected_version','chunk_hashes')},
                     'state_before':before_state,'state_after':state,'relationships_before':rel,'relationships_after':relations}
             files['history.jsonl']=(path/'history.jsonl').read_bytes().decode('utf-8')+json.dumps(record,ensure_ascii=False)+'\n'
