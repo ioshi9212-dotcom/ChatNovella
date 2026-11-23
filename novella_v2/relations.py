@@ -72,29 +72,32 @@ def normalize(raw: dict, cast: set[str]) -> dict:
     supplied = raw.get("familiarity", {})
     check(isinstance(supplied, dict) and set(supplied) <= people,
           "Unknown familiarity source")
-    statuses = {}
-    for src in sorted(people):
-        given = supplied.get(src, {})
+    # Sparse representation: an omitted direction means "unaware".
+    # Do not serialize N×(N-1) unknown links into every game packet.
+    statuses: dict[str, dict[str, str]] = {}
+    for src, given in supplied.items():
         check(isinstance(given, dict) and set(given) <= people - {src},
               "Unknown familiarity target")
-        statuses[src] = {}
-        for dst in sorted(people - {src}):
-            explicit = given.get(dst)
-            if explicit is not None:
-                check(explicit in STATUSES, "Unknown familiarity status")
-                statuses[src][dst] = explicit
-            elif src in cast and ((dst == "pov" and metrics.get(src)) or
-                                  (dst != "pov" and npc_links.get(src, {}).get(dst))):
-                statuses[src][dst] = "acquainted"
-            else:
-                statuses[src][dst] = "unaware"
+        for dst, status in given.items():
+            check(status in STATUSES, "Unknown familiarity status")
+            if status != "unaware":
+                statuses.setdefault(src, {})[dst] = status
+    # Two-section legacy files already have feelings but no status field.
+    # Only infer prior acquaintance if no explicit status was supplied.
+    if "familiarity" not in raw:
+        for src, row in metrics.items():
+            if row:
+                statuses.setdefault(src, {})["pov"] = "acquainted"
+        for src, row in npc_links.items():
+            for dst in row:
+                statuses.setdefault(src, {})[dst] = "acquainted"
 
     for src, row in metrics.items():
-        check(statuses[src]["pov"] == "acquainted" or not row,
+        check(statuses.get(src, {}).get("pov", "unaware") == "acquainted" or not row,
               "Unacquainted NPC cannot have numeric feelings toward POV")
     for src, row in npc_links.items():
         for dst in row:
-            check(statuses[src][dst] == "acquainted",
+            check(statuses.get(src, {}).get(dst, "unaware") == "acquainted",
                   "Unacquainted NPC cannot have a directional relationship")
 
     chosen_rule = raw.get("rules", rule())
@@ -161,11 +164,15 @@ def update(existing: dict, updates: list[dict], cast: set[str],
         if "status" not in item:
             continue
         src, dst, new = item["source"], item["target"], item["status"]
-        previous = result["familiarity"][src][dst]
+        previous = result["familiarity"].get(src, {}).get(dst, "unaware")
         check(new != previous, "No-op familiarity update would bloat the archive")
-        if previous == "acquainted" and new != "acquainted":
-            check(item["reason"].strip(), "Acquaintance loss needs a reason")
-        result["familiarity"][src][dst] = new
+        if new == "unaware":
+            row = result["familiarity"].get(src, {})
+            row.pop(dst, None)
+            if not row:
+                result["familiarity"].pop(src, None)
+        else:
+            result["familiarity"].setdefault(src, {})[dst] = new
         if new != "acquainted" and src != "pov":
             if dst == "pov":
                 result["npc_to_pov"].pop(src, None)
@@ -178,7 +185,7 @@ def update(existing: dict, updates: list[dict], cast: set[str],
         if "status" in item:
             continue
         src, dst, value = item["source"], item["target"], item["value"]
-        check(result["familiarity"][src][dst] == "acquainted",
+        check(result["familiarity"].get(src, {}).get(dst, "unaware") == "acquainted",
               "Cannot record feelings about someone not personally acquainted")
         if dst == "pov":
             label = _word(item["metric"], 50, "Scale label")
