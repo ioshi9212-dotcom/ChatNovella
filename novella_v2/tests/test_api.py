@@ -33,14 +33,13 @@ class TestV2Http(unittest.TestCase):
         self.new_store = Engine(root / "data", rules)
         self.addCleanup(patch.stopall)
         patch.object(api, "store", self.new_store).start()
-        patch.object(api, "TOKEN", "t" * 32).start()
         self.client = TestClient(api.app)
-        self.auth = {"Authorization": "Bearer " + "t" * 32}
+        self.headers = {}
 
     def make_novel(self, original=None):
         original = original or "Мир и город.\r\nАдриан жёсткий, упрямый.\r\n"
         second = original.index("Адриан")
-        r = self.client.post("/v2/novels", headers=self.auth, json={
+        r = self.client.post("/v2/novels", headers=self.headers, json={
             "original": original,
             "blocks": [
                 {"start": 0, "end": second, "target": "novel"},
@@ -56,20 +55,20 @@ class TestV2Http(unittest.TestCase):
         created = self.make_novel()
         sid = created["session_id"]
         confirm = self.client.post("/v2/novels/" + sid + "/approve",
-                                   headers=self.auth,
+                                   headers=self.headers,
                                    json={"expected_version": created["version"],
                                          "canon_hash": created["canon_hash"],
                                          "confirmation": "Утверждаю"})
         self.assertEqual(confirm.status_code, 200, confirm.text)
         opening = self.client.post("/v2/novels/" + sid + "/opening",
-                                   headers=self.auth,
+                                   headers=self.headers,
                                    json={"expected_version": confirm.json()["version"],
                                          "state": state(0)})
         self.assertEqual(opening.status_code, 200, opening.text)
         return sid
 
     def prepared(self, sid, reader="Привет", participants=None, kind="turn"):
-        r = self.client.post(f"/v2/novels/{sid}/prepare", headers=self.auth,
+        r = self.client.post(f"/v2/novels/{sid}/prepare", headers=self.headers,
                              json={"reader_text": reader, "participants": participants or ["adrian"],
                                    "kind": kind})
         self.assertEqual(r.status_code, 200, r.text)
@@ -77,7 +76,7 @@ class TestV2Http(unittest.TestCase):
         content = []
         for index in range(packet["chunk_count"]):
             res = self.client.get(f"/v2/novels/{sid}/chunks/{packet['packet_id']}/{index}",
-                                  headers=self.auth)
+                                  headers=self.headers)
             self.assertEqual(res.status_code, 200, res.text)
             self.assertLessEqual(len(res.json()["content"]), 36000)
             content.append(res.json()["content"])
@@ -86,21 +85,10 @@ class TestV2Http(unittest.TestCase):
     def test_healthz_is_public(self):
         self.assertEqual(self.client.get("/healthz").json()["engine"], "chatnovella-v2")
 
-    def test_all_private_routes_require_token(self):
-        self.assertEqual(self.client.get("/openapi.json").status_code, 401)
-        self.assertEqual(self.client.get("/v2/novels/NV2_" + "a" * 24).status_code, 401)
-        self.assertEqual(self.client.post("/v2/novels", json={}).status_code, 401)
-        self.assertEqual(self.client.get("/openapi.json", headers=self.auth).status_code, 200)
-
-    def test_wrong_bearer_token_is_rejected(self):
-        self.assertEqual(self.client.get("/openapi.json", headers={
-            "Authorization": "Bearer " + "x" * 32}).status_code, 401)
-
-    def test_server_fails_closed_when_token_missing(self):
-        with patch.object(api, "TOKEN", ""):
-            self.assertEqual(self.client.get("/openapi.json").status_code, 503)
-            self.assertEqual(self.client.post("/v2/novels", json={}).status_code, 503)
-            self.assertEqual(self.client.get("/healthz").status_code, 200)
+    def test_api_works_without_credentials(self):
+        self.assertEqual(self.client.get("/openapi.json").status_code, 200)
+        self.assertEqual(self.client.post("/v2/novels", json={}).status_code, 422)
+        self.assertEqual(self.client.get("/v2/instructions").status_code, 200)
 
     def test_http_preapproval_preview_is_exact(self):
         src = "Петербург. 🐺\r\nАдриан хмурится.\r\n"
@@ -145,13 +133,13 @@ class TestV2Http(unittest.TestCase):
                  "value": 60, "reason": "Открытый разговор"},
             ],
         }
-        r = self.client.post(f"/v2/novels/{sid}/turns", headers=self.auth, json=body)
+        r = self.client.post(f"/v2/novels/{sid}/turns", headers=self.headers, json=body)
         self.assertEqual(r.status_code, 200, r.text)
         self.assertEqual(r.json()["turn"], 1)
-        repeat = self.client.post(f"/v2/novels/{sid}/turns", headers=self.auth, json=body)
+        repeat = self.client.post(f"/v2/novels/{sid}/turns", headers=self.headers, json=body)
         self.assertEqual(repeat.json(), r.json())
         history = self.client.get(f"/v2/novels/{sid}/history",
-                                  headers=self.auth, params={"query": "Встречаемся"})
+                                  headers=self.headers, params={"query": "Встречаемся"})
         self.assertEqual(history.status_code, 200, history.text)
         self.assertEqual(len(history.json()["scenes"]), 1)
         newpacket, newcontent = self.prepared(sid, reader="Что потом?")
@@ -159,14 +147,14 @@ class TestV2Http(unittest.TestCase):
         self.assertIn("Адриан назначил встречу", newcontent)
         self.assertIn("доверие", newcontent)
         self.assertGreater(newpacket["version"], p["version"])
-        undo = self.client.post(f"/v2/novels/{sid}/rollback", headers=self.auth,
+        undo = self.client.post(f"/v2/novels/{sid}/rollback", headers=self.headers,
                                 json={"expected_version": r.json()["version"],
                                       "request_id": body["request_id"],
                                       "reason": "Отменить этот ход"})
         self.assertEqual(undo.status_code, 200, undo.text)
-        status = self.client.get(f"/v2/novels/{sid}", headers=self.auth).json()
+        status = self.client.get(f"/v2/novels/{sid}", headers=self.headers).json()
         self.assertEqual(status["turn"], 0)
-        scenes = self.client.get(f"/v2/novels/{sid}/history", headers=self.auth).json()
+        scenes = self.client.get(f"/v2/novels/{sid}/history", headers=self.headers).json()
         self.assertEqual(scenes["scenes"], [])
 
     def test_http_same_request_resumes_and_replays_without_regeneration(self):
@@ -174,23 +162,23 @@ class TestV2Http(unittest.TestCase):
         url = f"/v2/novels/{sid}/prepare"
         body = {"reader_text": "Привет", "participants": ["adrian"],
                 "kind": "turn", "request_id": "http-resume-1"}
-        first = self.client.post(url, headers=self.auth, json=body)
+        first = self.client.post(url, headers=self.headers, json=body)
         self.assertEqual(first.status_code, 200, first.text)
         prepared = first.json()
         self.assertFalse(prepared["all_chunks_read"])
-        second = self.client.post(url, headers=self.auth, json=body)
+        second = self.client.post(url, headers=self.headers, json=body)
         self.assertEqual(second.status_code, 200, second.text)
         self.assertEqual(second.json()["packet_id"], prepared["packet_id"])
         self.assertTrue(second.json()["reused_pending_packet"])
         for index in second.json()["unread_chunk_indices"]:
             result = self.client.get(
                 f"/v2/novels/{sid}/chunks/{prepared['packet_id']}/{index}",
-                headers=self.auth)
+                headers=self.headers)
             self.assertEqual(result.status_code, 200)
-        ready = self.client.post(url, headers=self.auth, json=body).json()
+        ready = self.client.post(url, headers=self.headers, json=body).json()
         self.assertTrue(ready["all_chunks_read"])
         scene = "**Адриан** — Получено."
-        saved = self.client.post(f"/v2/novels/{sid}/turns", headers=self.auth, json={
+        saved = self.client.post(f"/v2/novels/{sid}/turns", headers=self.headers, json={
             "request_id": body["request_id"],
             "expected_version": prepared["version"],
             "packet_id": prepared["packet_id"],
@@ -202,19 +190,19 @@ class TestV2Http(unittest.TestCase):
             "knowledge": [], "events": [], "relations": [],
         })
         self.assertEqual(saved.status_code, 200, saved.text)
-        replay = self.client.post(url, headers=self.auth, json=body)
+        replay = self.client.post(url, headers=self.headers, json=body)
         self.assertEqual(replay.status_code, 200, replay.text)
         self.assertTrue(replay.json()["already_committed_duplicate"])
         self.assertEqual(replay.json()["narration"], scene)
         self.assertNotIn("packet_id", replay.json())
         self.assertEqual(self.client.get(
-            f"/v2/novels/{sid}/history", headers=self.auth).json()["scenes"][0]["narration"], scene)
+            f"/v2/novels/{sid}/history", headers=self.headers).json()["scenes"][0]["narration"], scene)
 
     def test_http_invalid_session_returns_client_error(self):
-        self.assertEqual(self.client.get("/v2/novels/INVALID", headers=self.auth).status_code, 422)
+        self.assertEqual(self.client.get("/v2/novels/INVALID", headers=self.headers).status_code, 422)
 
     def test_http_missing_required_body_does_not_crash_server(self):
-        r = self.client.post("/v2/novels", headers=self.auth, json={})
+        r = self.client.post("/v2/novels", headers=self.headers, json={})
         self.assertEqual(r.status_code, 422, r.text)
 
     def test_http_36k_unicode_output(self):
