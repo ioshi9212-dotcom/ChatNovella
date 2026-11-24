@@ -30,15 +30,12 @@ def digest(text):
 class TestV2MCP(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.token_patch = patch.object(api, "TOKEN", "temporary-mcp-test-only-" + "x" * 32)
-        cls.token_patch.start()
         cls.client = TestClient(api.app)
         cls.client.__enter__()
 
     @classmethod
     def tearDownClass(cls):
         cls.client.__exit__(None, None, None)
-        cls.token_patch.stop()
 
     def setUp(self):
         self.tmp = TemporaryDirectory()
@@ -48,10 +45,7 @@ class TestV2MCP(unittest.TestCase):
         self.store_patch = patch.object(api, "store", self.engine)
         self.store_patch.start()
         self.addCleanup(self.store_patch.stop)
-        self.headers = {
-            "Authorization": "Bearer " + api.TOKEN,
-            "Accept": "application/json, text/event-stream",
-        }
+        self.headers = {"Accept": "application/json, text/event-stream"}
         self.serial = 0
 
     def rpc(self, method, params=None, *, headers=None):
@@ -147,13 +141,11 @@ class TestV2MCP(unittest.TestCase):
                                     "status": "active", "note": "Обнаружен тайник ключа",
                                     "source": "Ключ спрятан в красной книге"}]}
 
-    def test_auth_transport_and_all_typed_tools(self):
+    def test_public_transport_and_all_typed_tools(self):
         message = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
-        self.assertEqual(self.client.post("/mcp", json=message).status_code, 401)
-        self.assertEqual(self.client.post("/mcp", json=message, headers={
-            "Authorization": "Bearer wrong"}).status_code, 401)
-        with patch.object(api, "TOKEN", ""):
-            self.assertEqual(self.client.post("/mcp", json=message).status_code, 503)
+        public = self.client.post("/mcp", json=message, headers=self.headers)
+        self.assertEqual(public.status_code, 200, public.text)
+        self.assertIn("tools", public.json()["result"])
         init = self.rpc("initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
                                       "clientInfo": {"name": "V2 acceptance", "version": "1.0"}})
         self.assertEqual(init["serverInfo"]["name"], "ChatNovella V2")
