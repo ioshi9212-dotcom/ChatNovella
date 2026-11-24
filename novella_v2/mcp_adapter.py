@@ -24,7 +24,13 @@ from .mcp_models import (
 
 
 def build_mcp(engine: Callable[[], Engine]) -> FastMCP:
-    host = os.getenv("CHATNOVELLA_V2_PUBLIC_HOST", "").strip().lower()
+    # Current Amvera application keeps its existing domain after the
+    # main-branch V2 switchover; allow that host without a new secret.
+    # Override only if the project uses a different actual hostname.
+    host = os.getenv(
+        "CHATNOVELLA_V2_PUBLIC_HOST",
+        "chatnovella-yumikofv.waw0.amvera.tech",
+    ).strip().lower()
     hosts = ["localhost", "localhost:*", "127.0.0.1", "127.0.0.1:*", "testserver"]
     origins = ["https://chatgpt.com", "http://localhost:*", "http://127.0.0.1:*"]
     if host:
