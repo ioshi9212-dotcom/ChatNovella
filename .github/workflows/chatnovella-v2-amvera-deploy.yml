@@ -37,9 +37,8 @@ jobs:
         run: |
           sudo mkdir -p /data/chatnovella-v2
           sudo chown "$USER" /data/chatnovella-v2
-      - name: Smoke test V2 Amvera entrypoint with a throwaway CI secret
+      - name: Smoke test V2 Amvera entrypoint without credentials
         env:
-          CHATNOVELLA_V2_TOKEN: ci-test-credential-not-for-production-123456789
           CHATNOVELLA_V2_DATA_DIR: /data/chatnovella-v2
         run: |
           python - <<'PY'
@@ -51,15 +50,12 @@ jobs:
               health = api.get('/healthz')
               assert health.status_code == 200, health.text
               assert health.json()['engine'] == 'chatnovella-v2'
-              assert api.get('/v2/instructions').status_code == 401
-              assert api.get('/openapi.json').status_code == 401
-              bearer = {'Authorization': 'Bearer '+os.environ['CHATNOVELLA_V2_TOKEN']}
-              instructions = api.get('/v2/instructions', headers=bearer)
+              instructions = api.get('/v2/instructions')
               assert instructions.status_code == 200, instructions.text
               assert instructions.json()['rules']['chars'] > 0
               assert 'skin_builder' in instructions.json()
-              assert api.get('/openapi.json', headers=bearer).status_code == 200
-          print('AMVERA_V2_HEALTH_AND_AUTH_OK')
+              assert api.get('/openapi.json').status_code == 200
+          print('AMVERA_V2_HEALTH_NO_AUTH_OK')
           PY
       - name: Test V2 runtime and deployment protection
         run: python -m unittest discover -s novella_v2/tests -v
