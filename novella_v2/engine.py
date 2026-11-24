@@ -666,12 +666,13 @@ class Engine:
         # Rules and Skin Builder belong to the chat-scoped instruction read,
         # never to a gameplay packet. A remote edit must not force re-reading.
         sources = [path / name for name in names]
-        return [[str(p), p.stat().st_size, p.stat().st_mtime_ns] for p in sources]
+        return [[str(p), sha256(p.read_bytes()).hexdigest()] for p in sources]
 
     @staticmethod
-    def _packet_stamp(path: Path) -> list[int]:
-        st = (path / "system/packet.json").stat()
-        return [st.st_size, st.st_mtime_ns]
+    def _packet_stamp(path: Path) -> str:
+        # Mounted storage can settle timestamps after fsync/rename. Compare
+        # the actual bytes so metadata changes cannot invalidate a read packet.
+        return sha256((path / "system/packet.json").read_bytes()).hexdigest()
 
     @staticmethod
     def _manifest(packet: dict, audit_due: int, reused: bool = False) -> dict:

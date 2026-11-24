@@ -5,6 +5,7 @@ import base64
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 import json
+import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -79,6 +80,25 @@ class TestV2Integrity(unittest.TestCase):
             "events": events if events is not None else [],
             "relations": relations if relations is not None else [],
         }
+
+    def test_context_survives_storage_timestamp_changes(self):
+        packet, _ = self.packet()
+        for name in ["system/packet.json", "novel.md", "state.md"]:
+            file = self.path(name)
+            stat = file.stat()
+            os.utime(file, ns=(stat.st_atime_ns, stat.st_mtime_ns + 10_000_000))
+        self.assertTrue(self.engine.commit(self.sid, self.turn(packet))["saved"])
+
+    def test_context_detects_same_size_edit_with_preserved_timestamp(self):
+        packet, _ = self.packet()
+        file = self.path("system/packet.json")
+        stat = file.stat()
+        content = file.read_bytes()
+        file.write_bytes(content.replace(b'"turn"', b'"TURN"', 1))
+        self.assertEqual(file.stat().st_size, stat.st_size)
+        os.utime(file, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+        with self.assertRaisesRegex(EngineError, "Prepared context bytes changed"):
+            self.engine.commit(self.sid, self.turn(packet))
 
     def test_preapproval_canon_preview_reads_all_verbatim_sources(self):
         src = "Город, дождь.\r\nАдриан 🦊 грубый.\r\nСайлас.\r\n"
