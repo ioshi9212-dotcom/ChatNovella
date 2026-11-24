@@ -1,7 +1,6 @@
 """Isolated API for ChatNovella V2. Does not import or expose Lite sessions."""
 from __future__ import annotations
 
-import hmac
 import os
 from contextlib import asynccontextmanager
 
@@ -12,7 +11,6 @@ from .engine import Engine, EngineError
 from .mcp_adapter import build_mcp
 
 store = Engine(os.getenv("CHATNOVELLA_V2_DATA_DIR", "./.novella_v2_data"))
-TOKEN = os.getenv("CHATNOVELLA_V2_TOKEN", "")
 mcp = build_mcp(lambda: store)
 mcp_app = mcp.streamable_http_app()
 
@@ -24,18 +22,6 @@ async def lifespan(_app):
 
 
 app = FastAPI(title="ChatNovella V2", version="0.1.0", lifespan=lifespan)
-
-
-@app.middleware("http")
-async def require_token(request: Request, call_next):
-    if request.url.path == "/healthz":
-        return await call_next(request)
-    # Fail closed. A deployed server without a token must not expose private novels.
-    if len(TOKEN) < 24:
-        return JSONResponse({"error": "CHATNOVELLA_V2_TOKEN must be configured"}, status_code=503)
-    if not hmac.compare_digest(request.headers.get("authorization", ""), "Bearer " + TOKEN):
-        return JSONResponse({"error": "Unauthorized"}, status_code=401)
-    return await call_next(request)
 
 
 @app.exception_handler(EngineError)
@@ -143,5 +129,5 @@ def history(sid: str, start: int = 1, end: int | None = None, query: str = ""):
     return {"scenes": store.history(sid, start=start, end=end, query=query)}
 
 
-# Register REST routes first. The same fail-closed middleware protects /mcp.
+# Register REST routes before mounting the V2 MCP adapter.
 app.mount("/", mcp_app)
