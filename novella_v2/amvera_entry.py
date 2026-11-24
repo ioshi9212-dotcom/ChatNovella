@@ -1,8 +1,8 @@
 """Safe standalone Amvera entrypoint for ChatNovella V2.
 
 This module is used by a SEPARATE Amvera project, never by the Lite app.
-It fails before initializing the file store if authentication or storage
-is misconfigured. Do not import this module for local development.
+It checks that storage is isolated before initializing the V2 file store.
+No API token is required. Do not import this module for local development.
 """
 from __future__ import annotations
 
@@ -22,11 +22,4 @@ if directory == unsafe[0]:
 if not str(directory).startswith("/data/"):
     raise RuntimeError("For Amvera V2, data must live beneath the persistent /data mount")
 
-token = os.environ.get("CHATNOVELLA_V2_TOKEN", "")
-if len(token) < 24 or token.strip() != token:
-    raise RuntimeError(
-        "Configure CHATNOVELLA_V2_TOKEN as an Amvera secret (>=24 characters); "
-        "never store the token in GitHub"
-    )
-
-from .api import app  # noqa: E402 (guard security before initializing storage)
+from .api import app  # noqa: E402 (check storage isolation before initializing engine)
