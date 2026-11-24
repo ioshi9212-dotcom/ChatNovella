@@ -2,14 +2,26 @@
 from __future__ import annotations
 
 import os
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from .engine import Engine, EngineError
+from .mcp_adapter import build_mcp
 
-app = FastAPI(title="ChatNovella V2", version="0.1.0")
 store = Engine(os.getenv("CHATNOVELLA_V2_DATA_DIR", "./.novella_v2_data"))
+mcp = build_mcp(lambda: store)
+mcp_app = mcp.streamable_http_app()
+
+
+@asynccontextmanager
+async def lifespan(_app):
+    async with mcp.session_manager.run():
+        yield
+
+
+app = FastAPI(title="ChatNovella V2", version="0.1.0", lifespan=lifespan)
 
 
 @app.exception_handler(EngineError)
@@ -115,3 +127,7 @@ def audit(sid: str, body: dict):
 @app.get("/v2/novels/{sid}/history")
 def history(sid: str, start: int = 1, end: int | None = None, query: str = ""):
     return {"scenes": store.history(sid, start=start, end=end, query=query)}
+
+
+# Register REST routes before mounting the V2 MCP adapter.
+app.mount("/", mcp_app)

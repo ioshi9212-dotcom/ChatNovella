@@ -1,0 +1,62 @@
+name: Verify primary V2 Amvera configuration
+on:
+  push:
+    branches:
+      - main
+      - deploy/chatnovella-v2-amvera-20261124
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.11', '3.12', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install only V2 runtime and test dependencies
+        run: python -m pip install -r novella_v2/requirements.txt httpx PyYAML
+      - name: Validate Amvera manifest
+        run: |
+          python - <<'PY'
+          import yaml
+          from pathlib import Path
+          config = yaml.safe_load(Path('amvera.yaml').read_text())
+          assert config['meta']['environment'] == 'python'
+          assert config['build']['requirementsPath'] == 'novella_v2/requirements.txt'
+          assert config['run']['command'] == 'uvicorn novella_v2.amvera_entry:app --host 0.0.0.0 --port 8080 --workers 1'
+          assert config['run']['containerPort'] == 8080
+          assert config['run']['persistenceMount'] == '/data'
+          print('STANDALONE_V2_MANIFEST_OK')
+          PY
+      - name: Compile V2 application
+        run: python -m compileall -q novella_v2
+      - name: Simulate a dedicated Amvera persistent Data mount
+        run: |
+          sudo mkdir -p /data/chatnovella-v2
+          sudo chown "$USER" /data/chatnovella-v2
+      - name: Smoke test V2 Amvera entrypoint without credentials
+        env:
+          CHATNOVELLA_V2_DATA_DIR: /data/chatnovella-v2
+        run: |
+          python - <<'PY'
+          import os
+          from fastapi.testclient import TestClient
+          from novella_v2.amvera_entry import app, directory
+          assert str(directory) == '/data/chatnovella-v2'
+          with TestClient(app) as api:
+              health = api.get('/healthz')
+              assert health.status_code == 200, health.text
+              assert health.json()['engine'] == 'chatnovella-v2'
+              instructions = api.get('/v2/instructions')
+              assert instructions.status_code == 200, instructions.text
+              assert instructions.json()['rules']['chars'] > 0
+              assert 'skin_builder' in instructions.json()
+              assert api.get('/openapi.json').status_code == 200
+          print('AMVERA_V2_HEALTH_NO_AUTH_OK')
+          PY
+      - name: Test V2 runtime and deployment protection
+        run: python -m unittest discover -s novella_v2/tests -v

@@ -171,14 +171,12 @@ class TestChatInstructionsHttp(unittest.TestCase):
         engine = Engine(Path(temporary.name) / "sessions", self.files)
         self.addCleanup(patch.stopall)
         patch.object(api, "store", engine).start()
-        patch.object(api, "TOKEN", "t" * 32).start()
         self.http = TestClient(api.app)
-        self.headers = {"Authorization": "Bearer " + "t" * 32}
+        self.headers = {}
 
-    def test_private_instruction_routes_require_authentication(self):
+    def test_instruction_routes_are_available_without_token(self):
         for route in ("/v2/instructions", "/v2/instructions/versions"):
-            self.assertEqual(self.http.get(route).status_code, 401)
-            self.assertEqual(self.http.get(route, headers=self.headers).status_code, 200)
+            self.assertEqual(self.http.get(route).status_code, 200)
 
     def test_http_load_and_refresh_without_automatic_turn_fetches(self):
         first = self.http.get("/v2/instructions", headers=self.headers)
@@ -200,10 +198,9 @@ class TestChatInstructionsHttp(unittest.TestCase):
                                        headers=self.headers).json()["skin_builder_sha256"],
                          updated.json()["skin_builder"]["sha256"])
 
-    def test_http_missing_token_fails_closed(self):
-        with patch.object(api, "TOKEN", ""):
-            self.assertEqual(self.http.get("/v2/instructions").status_code, 503)
-            self.assertEqual(self.http.get("/v2/instructions/versions").status_code, 503)
+    def test_http_instruction_routes_work_without_authorization_header(self):
+        self.assertEqual(self.http.get("/v2/instructions").status_code, 200)
+        self.assertEqual(self.http.get("/v2/instructions/versions").status_code, 200)
 
 
 if __name__ == "__main__":
