@@ -1,7 +1,8 @@
-name: Verify standalone V2 Amvera configuration
+name: Verify primary V2 Amvera configuration
 on:
   push:
     branches:
+      - main
       - deploy/chatnovella-v2-amvera-20261124
   workflow_dispatch:
 
