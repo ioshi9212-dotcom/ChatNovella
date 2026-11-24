@@ -3,9 +3,13 @@
   "mcpServers": {
     "chatnovella": {
       "type": "streamable-http",
-      "url": "https://chatnovella-yumikofv.waw0.amvera.tech/mcp",
+      "url": "https://novellachat2-yumikofv.mia0.amvera.tech/mcp",
       "extensions": {
-        "com.openai": {"auth": {"type": "none"}}
+        "com.openai": {
+          "auth": {
+            "type": "none"
+          }
+        }
       }
     }
   }
