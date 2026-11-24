@@ -1,7 +1,7 @@
 """Streamable HTTP MCP adapter for V2, using the same isolated REST engine.
 
-The outer V2 API's fail-closed Bearer middleware protects /mcp. No token is
-embedded here or forwarded to another service. Blocking store I/O stays in
+The V2 server exposes /mcp without an API token. Keep the service private
+at the hosting/network level if novels must not be public. Blocking store I/O stays in
 Starlette's thread pool so a session lock cannot block the async server.
 """
 from __future__ import annotations
