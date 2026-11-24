@@ -1,6 +1,5 @@
-# STANDALONE ChatNovella V2 deployment branch only.
-# Never merge this root file into main: main runs the legacy Lite app.
-# Create a SECOND Amvera application linked to this branch.
+# Main ChatNovella Amvera service now runs V2 only.
+# Older Lite code and its /data/chatnovella-lite storage are left untouched.
 meta:
   environment: python
   toolchain:
