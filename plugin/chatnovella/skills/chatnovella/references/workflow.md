@@ -1,95 +1,82 @@
-# ChatNovella Lite — инструкция подключения
+# ChatNovella V2
 
-На действующем адресе Amvera работает Lite. Новые сессии имеют ID LITE_.
-Архивные CN_ сессии сохранены на диске, но этот движок их не открывает и не
-мигрирует автоматически. Для тестирования начни новую новеллу.
+Use only NV2_ sessions with this primary V2 server. LITE_/CN_ data remain in
+the old storage but cannot be opened through V2. Never migrate, delete or
+rewrite them automatically. Authentication is not required; do not request tokens.
 
-1. Сохраняй исходник дословно. При настройке прочитай все части анкеты, согласуй
-   противоречия и подготовь полный novel.md без сокращений. Реестр ID — POV_001,
-   NPC_001 и далее, один раз на всю историю. Отдельные карточки не создавай.
-   У POV и каждого NPC с момента регистрации отдельный пустой файл:
-   knowledge/POV_001.md или knowledge/NPC_001.md (по соответствующему ID);
-   это не биография, а приобретённая память.
-2. Создай предложенную сессию. Через prepare_lite_context(kind=canon) и все
-   read_lite_chunk прочитай исходник, канон, начальные отношения и состояние.
-   Покажи читателю полный канон и стартовые игровые оценки, получи явное
-   утверждение. Только затем approve_lite_canon с точным хешем. Разницу с
-   оригиналом перечисли в approved_changes. Одобрение не запускает первую сцену.
-3. На отдельную команду запуска или очередной ввод сохрани reader_text дословно.
-   prepare_lite_context с IDs участников. Прочитай все чанки, сверяя SHA256.
-   Анкета, rules, Skin Builder, отношения, состояние, хронология и три последние
-   полные сцены обязательны. Каждый новый ход загружай и читай полный актуальный
-   Skin Builder из свежего пакета. Сохранённые сцены и сцены текущего чата
-   используй только для фактов и непрерывности, не как образец режиссуры, стиля
-   или построения новой сцены. Отсутствие персонажа в сцене не передаёт ему знание.
-4. Если входит новый NPC, ДО написания его взаимодействия получи свежий пакет
-   с его ID и прочитай все чанки. Загружай только нужную приобретённую память.
-   Исходные знания находятся в полном каноне, не копируй их в knowledge.
-5. Пиши сцену сразу по полному актуальному Skin Builder: его требования задают
-   художественную режиссуру, стиль и формат. Канон задаёт мир и характеры,
-   история — только уже произошедшие события. Не перенимай из предыдущих сцен
-   художественные приёмы, шаблоны и ошибки, даже если они повторялись.
-   Не запускай дополнительных многоступенчатых проверок, повторных загрузок
-   контекста ради проверки или циклов переписывания сцены. Технический сервер
-   не оценивает литературу, не требует scorecard, review или режиссёрского
-   плана. Правила художественного поведения остаются обязательными для GPT.
-6. Сохрани Turn: уникальный request_id; expected_version; packet_id; точные
-   chunk_hashes; reader_text; narration; participants; state_patch; relations;
-   knowledge_review; knowledge; events или no_event_reason. В knowledge_review
-   укажи для POV_001, каждого NPC из participants и каждого владельца фонового
-   знания его ID → recorded (есть запись в knowledge) либо none (нет новой информации).
-   Отсутствующий/неполный отчёт сервер не примет. Сверяй полученные
-   knowledge_written, knowledge_owners и timeline_events_written.
-   Патчи состояния сохраняют старые незатронутые детали. present и remote заменяются целиком при передаче;
-   pov и другие вложенные поля объединяются, списки заменяются. Ушедшего NPC
-   исключи из полного present, остальных сохрани со всеми сведениями.
-   В state_patch НЕЛЬЗЯ писать «знает/не знает/узнал/услышал/видел» и старые
-   открытия NPC даже в unfinished/physical/objects. Это не состояние сцены.
-   Из уже загрязнённого state старые записи удалять только после сверки источников.
-7. NPC→POV: числовые индивидуальные шкалы 0–100, обычная дельта до ±3,
-   скачок — significant=true с конкретной причиной. Необоснованные изменения
-   запрещены; /0 нормально. NPC→NPC — слова, направления независимы.
-   Не смешивай настроение с устойчивым чувством. Не создавай шкалы для
-   эпизодического персонажа без постоянного ID.
-8. Новое знание: owner ID, факт, статус knows/suspects/mistaken/refuted,
-   source_kind, source_ids, источник, дословная evidence из сцены. Личное SMS
-   доступно участникам переписки. Фоновое личное знание без мировой вехи
-   запиши как source_kind=offscreen, event_index=null, source с конкретным
-   описанием наблюдения (не менее 25 символов) и evidence — точный фрагмент
-   этого source (не менее 12 символов). Не создавай фиктивное событие хронологии
-   только ради персональной памяти. Если реальное важное событие есть, укажи
-   event_index и evidence из него. Опровержение добавляй с supersedes, не стирай
-   раннюю запись. Повторную запись того же приобретения не отправляй.
-   Достаточность и допустимость источника проверяет GPT.
-   Хронология — только долговременные мировые вехи, а не пересказ каждого хода.
-   Для каждого Event обязательны significance (turning_point, revelation,
-   irreversible_change, commitment, major_consequence) и significance_reason:
-   конкретная причина значимости (12–240 символов). event — до 350,
-   consequence — до 220 символов. Обычные личные открытия пишутся в knowledge,
-   бытовые действия остаются в полном history.jsonl.
-9. Дождись saved=true и публикуй точный возвращённый narration. При сетевом сбое
-   повтори ТОТ ЖЕ request_id и payload, не создавай новый ход. Stale version —
-   перечитай состояние, не сохраняй поверх. Никаких обещаний «всё сохранилось»
-   по одному HTTP 200 без тела ответа.
-10. После ходов 15/30/45/60... следующая сцена заблокирована до аудита.
-    prepare(kind=audit), прочитать все чанки с полными 15 сценами. На 60-м также
-    вся хронология и память всех NPC. Проверить continuity, relationships,
-    knowledge, time_state, timeline; на 60-м all_npc_knowledge и long_term.
-    report содержит точный отрывок источника для каждого пункта. Исправления
-    только подтверждённые: имя файла → before/after/reason. Канон и историю
-    не переписывать. На 15-м сервер автоматически уплотняет JSON хронологии
-    и памяти участвовавших NPC; на 60-м — ВСЮ накопленную хронологию,
-    знания POV и ВСЕХ NPC за всю игру, со сверкой каждого записанного
-    приобретения/вехи с неизменяемым архивом ВСЕХ активных ходов. Модель читает
-    15 полных последних сцен, но не все 60/120 сцен целиком; её аудиторский
-    пакет на 60-м содержит полную хронологию/память по всем ID. Сервер удаляет
-    лишь строго одинаковые дубли, сохраняя реальные повторные свидетельства,
-    прежние ошибочные убеждения и связи supersedes; сокращает формат без
-    потери фактов. Проверяй audit_compaction после завершения. Не делать
-    дополнительные запросы к GPT ради сжатия. Семантическую достоверность
-    и допустимость знаний проверяет GPT; цитата сама по себе этого не доказывает.
-11. Откат — только по просьбе читателя, точный последний request_id, причина.
-    Состояние, отношения, память, хронология возвращаются; исходная сцена
-    остаётся в history.jsonl с отметкой отката. Канон меняется только через
-    amend_lite_canon по отдельному явному разрешению, старая версия архивируется. Нового постоянного NPC добавляй только согласованной
-    поправкой полного канона с registry_additions, не переназначай старые ID.
+At the first use in a new chat, call load_v2_instructions once and read the
+complete rules.content and skin_builder.content, verifying their UTF-8 SHA-256.
+Thereafter use those versions for the current chat. Reload only when the user
+explicitly requests an update (or once to recover texts lost after compaction).
+instruction_versions returns hashes only. A refresh is technical, not a turn.
+Never rewrite, replace or supplement the author's Skin Builder. If empty, keep
+it empty. Rules describe mechanics; they must not dictate literary style.
+
+For new setup, preserve the entire author's original verbatim. Assign all text
+exactly once with ordered unique anchors or contiguous Unicode ranges. Preserve
+English character IDs. Supply directed familiarity and only canon-supported
+initial relationships/threads. Prepare kind=canon and read all chunks. Show the
+complete proposed questionnaire and obtain explicit approval of canon_hash
+before approve_v2_canon, opening, or any gameplay. A deployment acceptance test
+may approve its own clearly isolated synthetic test fixture, never a real game.
+
+For each new turn choose one stable request_id. Call prepare_v2_context with
+that ID, exact reader_text and real participants. If already_committed_duplicate
+is true, return its saved narration without generating or saving another turn.
+If reused_pending_packet is true, continue that packet and read ONLY its
+unread_chunk_indices. Retain session_id, request_id, packet_id and read progress.
+Use read_v2_chunk to read each needed index once; verify each chunk's UTF-8
+SHA-256 against the manifest and the joined packet against its total SHA-256.
+Read all chunks before writing; require all_chunks_read=true from the last
+chunk response. Do not call prepare again merely to check readiness.
+
+relationships.md and open_threads.md must be read in EVERY turn/audit/canon
+packet, including empty files. Rules and Skin Builder are not in these packets.
+Load complete cards and personal knowledge for actual scene participants.
+Director context, hidden lore, relations, arcs, timeline and other characters'
+memories do not automatically become an NPC's knowledge. Before committing,
+check each speaker's factual claims once against their actual access. Add only
+new witnessed facts to the correct owner with a literal narration quote.
+
+Use the exact eight state fields: turn, datetime, location, pov, present, remote,
+objects, unfinished. Each physical actor has position, clothing, footwear,
+items, physical, unfinished. Keep biography, memory and feelings out of state.
+datetime may be null; do not invent a date. An actor who left before the final
+state needs scene_access with an exact quote proving physical/remote/ability
+access during this turn. Loading a card alone proves no participation.
+
+Save only REAL directed relationship changes. Missing familiarity means
+unaware; aware and acquainted are independent in each direction. Acquaintance
+does not expose secrets. Keep the author's metric names and meanings. For
+familiarity use a reason grounded in the scene (include a short exact quote);
+for feelings include exact evidence. NPC→POV values are 0..100, usually ±1..3;
+a larger change to an existing value requires significant=true, reason and
+evidence. NPC→NPC links are short words, metric=null. If no change, relations=[].
+Never change the embedded relationship rule during opening or audit.
+
+Check open arcs once after the scene. thread_updates includes only new,
+substantially changed or actually closed threads, with stable id and an exact
+source quote from narration. Otherwise use []. Closed threads leave the
+working file but remain archived. No forced deadlines or scheduled revelations.
+
+Commit using the ORIGINAL request_id, packet_id, chunk_hashes and reader_text.
+Publish narration ONLY after saved=true; return the confirmed saved narration.
+Identical retries must preserve the entire payload and must not create a turn.
+On timeout/5xx retry that exact operation at most twice. If save status is
+unknown, prepare with the SAME request_id to recover a committed result.
+For 4xx/validation errors read the exact code and correct the cause once; if it
+recurs, stop and explain it. Never loop prepare/read/rewrite. A near-duplicate
+warning is informational and does not require an artificial plot change.
+
+At turn 15/60 the next turn is blocked until the required audit. Prepare audit,
+read all chunks and verify hashes, then check the required report domains.
+At 60 include long_term. Corrections need before_sha256, after and reason;
+knowledge/timeline additions and relationship changes need exact witnessed
+source evidence. No invented knowledge; never rewrite original/history.
+Rollback only on explicit user request, after reading current status/history,
+with the current expected_version and exact request_id of the last saved turn.
+The archive must retain the cancelled scene. Search history using V2 tools only.
+
+## V2 tool names
+
+`load_v2_instructions`, `get_v2_instruction_versions`, `create_v2_novel`, `get_v2_status`, `approve_v2_canon`, `set_v2_opening`, `add_v2_character`, `prepare_v2_context`, `read_v2_chunk`, `save_v2_turn`, `finish_v2_audit`, `search_v2_history`, `rollback_v2_turn`

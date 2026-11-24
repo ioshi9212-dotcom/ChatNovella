@@ -1,0 +1,22 @@
+{
+  "interface": {
+    "capabilities": [],
+    "defaultPrompt": "Начнём новую новеллу в ChatNovella.",
+    "developerName": "Анастасия",
+    "displayName": "ChatNovella",
+    "longDescription": "Новеллы ChatNovella V2 с постоянным каноном, личными знаниями персонажей, отношениями и открытыми арками. Rules и авторский Skin Builder загружаются один раз на чат. Сцены публикуются после подтверждённого сохранения.",
+    "shortDescription": "Интерактивные новеллы",
+    "category": "Other"
+  },
+  "name": "chatnovella",
+  "version": "0.2.0",
+  "description": "Интерактивные новеллы с постоянным состоянием и загрузкой модулей из Amvera.",
+  "author": {
+    "name": "Анастасия",
+    "email": "ioshi9212@gmail.com"
+  },
+  "keywords": [],
+  "repository": "https://github.com/ioshi9212-dotcom/ChatNovella",
+  "skills": "./skills",
+  "mcpServers": "./.mcp.json"
+}
