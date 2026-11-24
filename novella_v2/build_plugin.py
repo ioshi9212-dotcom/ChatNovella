@@ -1,7 +1,7 @@
 """Build the private ChatNovella V2 plugin only after its real URL is verified.
 
 Usage: python -m novella_v2.build_plugin --url <actual HTTPS origin> --output <zip>
-No credential argument, environment capture or token file is supported.
+No token, credential argument or password is required.
 """
 from __future__ import annotations
 
@@ -39,7 +39,7 @@ def build(url: str, output: Path) -> None:
         "mcpServers": {"chatnovella-v2": {
             "type": "streamable-http", "url": base + "/mcp",
             "extensions": {"com.openai": {
-                "auth": {"type": "api_key", "headerScheme": "bearer"},
+                "auth": {"type": "none"},
             }},
         }},
     }
