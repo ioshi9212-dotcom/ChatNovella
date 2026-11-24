@@ -1,8 +1,7 @@
-"""Safe standalone Amvera entrypoint for ChatNovella V2.
+"""Entrypoint for ChatNovella V2 on the existing Amvera project.
 
-This module is used by a SEPARATE Amvera project, never by the Lite app.
-It checks that storage is isolated before initializing the V2 file store.
-No API token is required. Do not import this module for local development.
+It safeguards the persistent V2 storage directory and never uses Lite
+session data. No API token is required.
 """
 from __future__ import annotations
 
