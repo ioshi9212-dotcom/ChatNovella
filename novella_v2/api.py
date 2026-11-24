@@ -1,7 +1,6 @@
 """Isolated API for ChatNovella V2. Does not import or expose Lite sessions."""
 from __future__ import annotations
 
-import hmac
 import os
 
 from fastapi import FastAPI, Request
@@ -11,19 +10,6 @@ from .engine import Engine, EngineError
 
 app = FastAPI(title="ChatNovella V2", version="0.1.0")
 store = Engine(os.getenv("CHATNOVELLA_V2_DATA_DIR", "./.novella_v2_data"))
-TOKEN = os.getenv("CHATNOVELLA_V2_TOKEN", "")
-
-
-@app.middleware("http")
-async def require_token(request: Request, call_next):
-    if request.url.path == "/healthz":
-        return await call_next(request)
-    # Fail closed. A deployed server without a token must not expose private novels.
-    if len(TOKEN) < 24:
-        return JSONResponse({"error": "CHATNOVELLA_V2_TOKEN must be configured"}, status_code=503)
-    if not hmac.compare_digest(request.headers.get("authorization", ""), "Bearer " + TOKEN):
-        return JSONResponse({"error": "Unauthorized"}, status_code=401)
-    return await call_next(request)
 
 
 @app.exception_handler(EngineError)
