@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Any
 
 STATUSES = {"unaware", "aware", "acquainted"}
-MAX_SCALES = 10
 MAX_NPC_DESCRIPTION = 240
 RULE_TEMPLATE = Path(__file__).with_name("templates").joinpath("relationships.md")
 
@@ -53,8 +52,7 @@ def normalize(raw: dict, cast: set[str]) -> dict:
           "Relationship sections must be maps")
     check(set(metrics) <= cast and set(npc_links) <= cast, "Unknown NPC relation owner")
     for src, row in metrics.items():
-        check(isinstance(row, dict) and len(row) <= MAX_SCALES,
-              "NPC→POV permits at most 10 personal scales")
+        check(isinstance(row, dict), "NPC→POV personal scales must be a map")
         names: set[str] = set()
         for name, score in row.items():
             name = _word(name, 50, "Scale label")
@@ -207,8 +205,6 @@ def update(existing: dict, updates: list[dict], cast: set[str],
                           item["evidence"] in narration,
                           "A jump larger than ±3 needs an exact excerpt from the saved scene")
             else:
-                check(len(row) < MAX_SCALES,
-                      "NPC→POV cannot exceed 10 individual scales")
                 # First value is an initial baseline, not a change from zero.
                 check(not ("significant" in item and
                            type(item["significant"]) is not bool),
