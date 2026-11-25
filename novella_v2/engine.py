@@ -1473,20 +1473,27 @@ class Engine:
             arc_rows = open_threads.parse(
                 self._read(path, "open_threads.md")
                 if (path / "open_threads.md").exists() else open_threads.HEADER)
-            # A populated durable ledger requires a thorough plot audit.
-            # Old sessions with only the one-line arc index remain compatible.
-            windows = story_hooks.author_window_candidates(
-                self._read(path, "original.txt"), meta["turn"])
-            if hook_rows or arc_rows or windows:
+            story_hooks.validate_links(hook_rows, arc_rows)
+            need(packet.get("source_signature") ==
+                 self._source_signature(path, set(packet["participants"]), "audit"),
+                 "SOURCE_CHANGED", "Audit source changed; prepare again")
+            windows = self._author_windows(self._read(path, "original.txt"),
+                                           hook_rows, meta["turn"])
+            review_rows, next_audit_cursor = story_hooks.audit_selection(
+                hook_rows, arc_rows, meta["turn"], meta["audit_due"],
+                meta.get("story_audit_cursor", 0))
+            expected = ({"hook:" + h["id"] for h in review_rows} |
+                        {"arc:" + a["id"] for a in arc_rows} |
+                        {w["id"] for w in windows})
+            need(packet.get("audit_story_ids") == sorted(expected),
+                 "AUDIT_PACKET_STALE", "Prepare current story audit context")
+            if expected:
                 required.add("story")
             need(isinstance(report, dict) and set(report) == required and all(
                  isinstance(report[k], str) and bool(report[k].strip())
                  for k in required - {"story"}),
                  "AUDIT_REPORT", "Audit must check required domains")
-            if hook_rows or arc_rows or windows:
-                expected = ({"hook:" + h["id"] for h in hook_rows} |
-                            {"arc:" + a["id"] for a in arc_rows} |
-                            {w["id"] for w in windows})
+            if expected:
                 actual = report["story"]
                 need(isinstance(actual, dict) and set(actual) == expected and
                      all(isinstance(note, str) and len(note.strip()) >= 16
@@ -1650,16 +1657,24 @@ class Engine:
                  "report": report, "corrections": trail}) + "\n"
             new = {**meta, "version": meta["version"] + 1, "audit_due": 0,
                    "hook_file_hash": digest(hook_ledger),
+                   "first_seen": self._first_seen_from_archive(archived),
+                   "story_audit_cursor": next_audit_cursor,
                    "packet": None, "last_undo": None}
             if "relationships.md" in changes:
                 new["relationship_file_hash"] = digest(changes["relationships.md"])
             self._write(path, meta, changes, new)
-            findings = story_hooks.director_brief(hook_rows, meta["turn"])
+            audited_state = json.loads(changes.get("state.md", self._read(path, "state.md")))
+            findings = story_hooks.director_brief(hook_rows, meta["turn"],
+                new["first_seen"], audited_state["datetime"])
             return {"audited": True, "turn": meta["turn"],
                     "version": new["version"], "corrections": len(trail),
                     "plot_findings": {
                         "overdue": findings["author_deadlines_overdue"],
                         "stale": findings["stale_hooks"],
+                        "appearance_review": findings["appearance_review"],
+                        "conditions_due": findings["conditions_due"],
+                        "conditions_review": findings["conditions_review"],
+                        "reviewed_hook_count": len(review_rows),
                         "open_hook_count": sum(h["status"] != "closed" for h in hook_rows),
                         "open_arc_count": len(arc_rows)}}
 
