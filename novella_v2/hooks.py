@@ -203,19 +203,24 @@ def backfill(text: str, additions: list[dict], original: str,
               set(item) <= {"id", "arc_id", "title", "kind", "status",
                             "detail", "participants", "source",
                             "window_start", "window_end", "trigger", "origin_turn",
-                            "last_turn", "last_evidence", "reopen"},
+                            "last_turn", "last_evidence", "reopen", "reconcile"},
               "Backfill requires origin_turn and a complete hook proposal")
         quote_turn = item["origin_turn"]
         check(type(quote_turn) is int and 0 <= quote_turn <= current_turn,
               "Invalid backfill source turn")
         row = _proposal({k: v for k, v in item.items()
-                         if k not in {"origin_turn", "last_turn", "last_evidence", "reopen"}})
+                         if k not in {"origin_turn", "last_turn", "last_evidence", "reopen", "reconcile"}})
         existing = current.get(row["id"])
         reopen = item.get("reopen", False)
-        check(type(reopen) is bool and (existing is None and not reopen or
+        reconcile = item.get("reconcile", False)
+        check(type(reopen) is bool and type(reconcile) is bool and
+              not (reopen and reconcile) and (
+              existing is None and not reopen and not reconcile or
               existing is not None and existing["status"] == "closed" and
-              reopen and row["status"] in OPEN_STATUSES),
-              "Backfill may only add new hooks or explicitly reopen a closed hook")
+              reopen and row["status"] in OPEN_STATUSES or
+              existing is not None and reconcile and
+              existing["status"] in OPEN_STATUSES and row["status"] == "closed"),
+              "Backfill may add new hooks, explicitly reopen or reconcile a historical closure")
         source = original if quote_turn == 0 else scenes.get(quote_turn, "")
         check(isinstance(row["source"], str) and
               len(row["source"]) >= 8 and row["source"] in source,
