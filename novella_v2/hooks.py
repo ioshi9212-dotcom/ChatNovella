@@ -11,11 +11,12 @@ import json
 import re
 
 HEADER = "# Сюжетные крючки и обязательства\n"
-MAX_HOOKS = 256
-MAX_CHANGES = 16
+MAX_HOOKS = 4096  # safety ceiling, not a storytelling quota
+MAX_CHANGES = 128
 IDENT = re.compile(r"^[a-z][a-z0-9_]{1,49}$")
 KINDS = {"mystery", "commitment", "appearance", "consequence", "npc_goal", "genre"}
-STATUSES = {"open", "active", "blocked"}
+OPEN_STATUSES = {"open", "active", "blocked"}
+STATUSES = OPEN_STATUSES | {"closed"}
 KEYS = {"id", "arc_id", "title", "kind", "status", "detail", "participants",
         "origin", "origin_turn", "last_evidence", "last_turn",
         "window_start", "window_end", "trigger"}
@@ -45,25 +46,28 @@ def clean(row: dict, cast: set[str] | None = None) -> dict:
     check(type(row["origin_turn"]) is int and row["origin_turn"] >= 0 and
           type(row["last_turn"]) is int and
           row["last_turn"] >= row["origin_turn"], "Invalid hook turn")
-    cast = cast or set()
     participants = row["participants"]
     check(isinstance(participants, list) and len(participants) == len(set(
         p for p in participants if isinstance(p, str))) and
         all(isinstance(p, str) and IDENT.fullmatch(p) for p in participants) and
-        (not cast or set(participants) <= cast | {"pov"}), "Invalid hook participants")
+        (cast is None or set(participants) <= cast | {"pov"}), "Invalid hook participants")
     for field in ("window_start", "window_end"):
         check(row[field] is None or (type(row[field]) is int and
               row[field] >= 1), "Invalid author window")
     if row["window_start"] is not None and row["window_end"] is not None:
         check(row["window_start"] <= row["window_end"], "Reversed author window")
-    if row["window_end"] is not None:
-        check(row["origin_turn"] == 0 and
-              re.search(rf"(?<![0-9]){row['window_end']}(?![0-9])", row["origin"]) is not None, 
-              "Turn deadlines must have literal author-canon evidence")
-    if row["window_start"] is not None:
-        check(row["origin_turn"] == 0 and
-              re.search(rf"(?<![0-9]){row['window_start']}(?![0-9])", row["origin"]) is not None,
-              "Turn windows must have literal author-canon evidence")
+    if row["window_start"] is not None or row["window_end"] is not None:
+        check(row["origin_turn"] == 0 and any(
+            w["window_start"] == row["window_start"] and
+            w["window_end"] == row["window_end"]
+            for w in author_window_candidates(row["origin"], 0)),
+            "Turn deadlines require an explicit matching author timing clause")
+        if row["kind"] == "appearance":
+            check(len(participants) == 1 and participants[0] != "pov",
+                  "Track each timed NPC appearance separately")
+    if row["status"] == "closed":
+        check(row["last_turn"] > 0 and len(row["detail"].strip()) >= 12,
+              "Closed hooks need a documented outcome in a real scene")
     return {
         "id": row["id"], "arc_id": row["arc_id"],
         "title": short(row["title"], 140, "title"),
@@ -81,7 +85,7 @@ def clean(row: dict, cast: set[str] | None = None) -> dict:
 
 def render(items: list[dict], cast: set[str] | None = None) -> str:
     check(isinstance(items, list) and len(items) <= MAX_HOOKS,
-          "Too many unresolved hooks")
+          "Story ledger exceeds safety capacity; preserve all entries and request maintenance")
     rows = [clean(item, cast) for item in items]
     check(len({item["id"] for item in rows}) == len(rows), "Duplicate hook id")
     rows.sort(key=lambda x: (x["arc_id"], x["id"]))
@@ -133,7 +137,7 @@ def seed(items: list[dict] | None, original: str,
     result = []
     for item in items or []:
         row = _proposal(item)
-        check(row["status"] in STATUSES, "Cannot seed a closed hook")
+        check(row["status"] in OPEN_STATUSES, "Cannot seed a closed hook")
         check(isinstance(row["source"], str) and
               row["source"] in original and len(row["source"]) >= 8,
               "Initial hook requires exact quote from author original")
@@ -161,6 +165,11 @@ def apply(text: str, updates: list[dict], narration: str, turn: int,
         else:
             for field in ("arc_id", "title", "kind"):
                 check(row[field] == old[field], "Hook identity cannot change")
+            check(old["status"] != "closed" or row["status"] != "closed",
+                  "Already closed hook cannot be closed again")
+            if old["kind"] == "appearance":
+                check(sorted(row["participants"]) == old["participants"],
+                      "Appearance obligation cannot change its NPC")
             for field in ("window_start", "window_end"):
                 check(row[field] in (None, old[field]),
                       "Cannot rewrite author deadline")
@@ -174,9 +183,10 @@ def apply(text: str, updates: list[dict], narration: str, turn: int,
                    "participants": row["participants"], "trigger": row["trigger"],
                    "last_evidence": row["source"], "last_turn": turn}
         if row["status"] == "closed":
-            del before[row["id"]]
-        else:
-            before[row["id"]] = clean(new, cast)
+            check(len(row["detail"].strip()) >= 12 and
+                  row["detail"].strip() != old["detail"],
+                  "Closure requires an explicit, changed outcome")
+        before[row["id"]] = clean(new, cast)
         result.append(item)
     return render(list(before.values()), cast), result
 
@@ -192,19 +202,41 @@ def backfill(text: str, additions: list[dict], original: str,
         check(isinstance(item, dict) and "origin_turn" in item and
               set(item) <= {"id", "arc_id", "title", "kind", "status",
                             "detail", "participants", "source",
-                            "window_start", "window_end", "trigger", "origin_turn"},
+                            "window_start", "window_end", "trigger", "origin_turn",
+                            "last_turn", "last_evidence", "reopen"},
               "Backfill requires origin_turn and a complete hook proposal")
         quote_turn = item["origin_turn"]
         check(type(quote_turn) is int and 0 <= quote_turn <= current_turn,
               "Invalid backfill source turn")
-        row = _proposal({k: v for k, v in item.items() if k != "origin_turn"})
-        check(row["id"] not in current, "Backfill may not overwrite existing hook")
+        row = _proposal({k: v for k, v in item.items()
+                         if k not in {"origin_turn", "last_turn", "last_evidence", "reopen"}})
+        existing = current.get(row["id"])
+        reopen = item.get("reopen", False)
+        check(type(reopen) is bool and (existing is None and not reopen or
+              existing is not None and existing["status"] == "closed" and
+              reopen and row["status"] in OPEN_STATUSES),
+              "Backfill may only add new hooks or explicitly reopen a closed hook")
         source = original if quote_turn == 0 else scenes.get(quote_turn, "")
         check(isinstance(row["source"], str) and
               len(row["source"]) >= 8 and row["source"] in source,
               "Backfill quote must exist in original or exact saved scene")
-        check(row["status"] != "closed", "Backfill only unresolved hooks")
-        current[row["id"]] = clean(_new(row, quote_turn), cast)
+        last_turn = item.get("last_turn", quote_turn)
+        if last_turn is None:
+            last_turn = quote_turn
+        last_evidence = item.get("last_evidence") or row["source"]
+        check(type(last_turn) is int and quote_turn <= last_turn <= current_turn,
+              "Invalid last development turn")
+        latest = original if last_turn == 0 else scenes.get(last_turn, "")
+        check(isinstance(last_evidence, str) and 8 <= len(last_evidence) <= 500 and
+              last_evidence in latest, "Last development requires its own exact quote")
+        entry = {**_new(row, quote_turn), "last_turn": last_turn,
+                 "last_evidence": last_evidence}
+        if existing is not None:
+            for field in ("arc_id", "title", "kind", "origin", "origin_turn",
+                          "window_start", "window_end"):
+                check(entry[field] == existing[field],
+                      "Reopening must preserve the original hook identity and source")
+        current[row["id"]] = clean(entry, cast)
     return render(list(current.values()), cast)
 
 
@@ -253,18 +285,28 @@ def author_window_candidates(original: str, turn: int) -> list[dict]:
             candidates.append({
                 "source_line": line_no, "source": excerpt,
                 "window_start": lower, "window_end": upper,
-                "overdue": turn + 1 > upper,
+                "window_elapsed": turn + 1 > upper,
+                "overdue": turn + 1 > upper,  # compatibility: only elapsed, not verified failure
             })
     return candidates
 
 
 def director_brief(items: list[dict], turn: int) -> dict:
-    """Explain plot obligations; NEVER auto-schedule a new NPC appearance."""
+    """Compact planning index. Closed obligations remain permanently recorded."""
     upcoming = turn + 1
-    rows = []
+    rows, closed = [], []
     for item in items:
         deadline = item["window_end"]
         state = "none"
+        if item["status"] == "closed":
+            if deadline is not None:
+                state = ("fulfilled_late" if item["last_turn"] > deadline else
+                         "fulfilled_early" if item["window_start"] is not None and
+                         item["last_turn"] < item["window_start"] else "fulfilled")
+            else:
+                state = "resolved"
+            closed.append({**item, "deadline_state": state})
+            continue
         if deadline is not None:
             if deadline < upcoming:
                 state = "overdue"
@@ -280,10 +322,10 @@ def director_brief(items: list[dict], turn: int) -> dict:
     return {
         "upcoming_turn": upcoming,
         "unresolved_hooks": rows,
-        "author_deadlines_overdue": [x for x in rows if x["deadline_state"] == "overdue"],
-        "author_windows_active": [x for x in rows if x["deadline_state"] == "author_window_open"],
-        "stale_hooks": [x for x in rows if x["turns_since_progress"] >= 20],
-        "note": ("Director-only facts, not POV/NPC knowledge. Review before choosing "
-                 "participants. Overdue windows are canonical violations to report; "
-                 "never invent retroactive scenes or force arbitrary appearances."),
+        "resolved_hooks": closed,
+        "author_deadlines_overdue": [x["id"] for x in rows if x["deadline_state"] == "overdue"],
+        "author_windows_active": [x["id"] for x in rows if x["deadline_state"] == "author_window_open"],
+        "stale_hooks": [x["id"] for x in rows if x["turns_since_progress"] >= 20],
+        "note": ("Director-only facts. Staleness is a diagnostic, not a quota. "
+                 "Never invent retroactive scenes or force arbitrary appearances."),
     }
