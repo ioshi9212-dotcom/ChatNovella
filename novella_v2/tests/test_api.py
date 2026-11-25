@@ -68,6 +68,8 @@ class TestV2Http(unittest.TestCase):
         return sid
 
     def prepared(self, sid, reader="Привет", participants=None, kind="turn"):
+        if kind == "turn":
+            self.assertEqual(self.client.get(f"/v2/novels/{sid}/director", headers=self.headers).status_code, 200)
         r = self.client.post(f"/v2/novels/{sid}/prepare", headers=self.headers,
                              json={"reader_text": reader, "participants": participants or ["adrian"],
                                    "kind": kind})
@@ -160,6 +162,7 @@ class TestV2Http(unittest.TestCase):
     def test_http_same_request_resumes_and_replays_without_regeneration(self):
         sid = self.start_novel()
         url = f"/v2/novels/{sid}/prepare"
+        self.assertEqual(self.client.get(f"/v2/novels/{sid}/director", headers=self.headers).status_code, 200)
         body = {"reader_text": "Привет", "participants": ["adrian"],
                 "kind": "turn", "request_id": "http-resume-1"}
         first = self.client.post(url, headers=self.headers, json=body)
