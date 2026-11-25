@@ -89,6 +89,36 @@ def seed(items: list[dict] | None, original: str) -> str:
     return render(initial)
 
 
+def backfill(text: str, additions: list[dict], original: str,
+             scenes: dict[int, str], current_turn: int) -> str:
+    """Restore explicitly identified arcs from real historical evidence only."""
+    current = {row["id"]: row for row in parse(text)}
+    _check(isinstance(additions, list) and len(additions) <= MAX_OPEN,
+           "Invalid historical arc repairs")
+    seen = set()
+    for item in additions:
+        _check(isinstance(item, dict) and set(item) ==
+               {"id", "title", "status", "note", "source", "origin_turn"},
+               "Arc repair needs id/title/status/note/source/origin_turn")
+        turn = item["origin_turn"]
+        _check(type(turn) is int and 0 <= turn <= current_turn,
+               "Invalid historical arc source turn")
+        quote = _short(item["source"], 350, "Historical arc source")
+        _check(len(quote) >= 8 and quote in (original if turn == 0 else scenes.get(turn, "")),
+               "Historical arc needs exact original or saved-scene evidence")
+        entry = _entry({k: v for k, v in item.items()
+                        if k not in {"source", "origin_turn"}} | {"turn": turn})
+        ident = entry["id"]
+        _check(ident not in seen, "Duplicate historical arc repair")
+        seen.add(ident)
+        if ident in current:
+            _check(current[ident]["title"] == entry["title"],
+                   "Existing arc must preserve its title")
+        else:
+            current[ident] = entry
+    return render(list(current.values()))
+
+
 def apply(text: str, updates: list[dict], narration: str, turn: int) -> tuple[str, list[dict]]:
     """Update each ID once per scene; closed threads leave working file immediately."""
     current = {row["id"]: row for row in parse(text)}
