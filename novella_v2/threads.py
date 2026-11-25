@@ -8,7 +8,7 @@ from __future__ import annotations
 import re
 
 HEADER = "# Незавершённые линии\n"
-MAX_OPEN = 48
+MAX_OPEN = 512  # protective capacity, not a plot quota
 ID = re.compile(r"^[a-z][a-z0-9_]{1,49}$")
 ROW = re.compile(r"^- \[(не началась|активна)\] ([a-z][a-z0-9_]{1,49}) \| (.+) \| (.+) \| ход ([0-9]{1,8})$")
 DISPLAY = {"not_started": "не началась", "active": "активна"}
@@ -48,7 +48,7 @@ def _entry(item: dict) -> dict:
 
 def render(items: list[dict]) -> str:
     _check(isinstance(items, list) and len(items) <= MAX_OPEN,
-           "Too many unresolved story threads: merge related threads")
+           "Too many unresolved story threads: preserve entries and request maintenance")
     clean = [_entry(item) for item in items]
     _check(len({row["id"] for row in clean}) == len(clean),
            "Duplicate thread id")
