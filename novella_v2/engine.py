@@ -522,6 +522,8 @@ class Engine:
         initial_open_threads = open_threads.seed(initial_threads, original)
         initial_hook_ledger = story_hooks.seed(initial_hooks, original,
                                               set(names) - {"pov"})
+        story_hooks.validate_links(story_hooks.parse(initial_hook_ledger),
+                                   open_threads.parse(initial_open_threads))
         sid = "NV2_" + secrets.token_hex(12)
         tmp = Path(tempfile.mkdtemp(prefix=".new-", dir=self.root))
         try:
@@ -546,6 +548,7 @@ class Engine:
                     "relation_rule_hash": digest(candidate_relations["rules"]),
                     "relationship_file_hash": digest(files["relationships.md"]),
                     "hook_file_hash": digest(initial_hook_ledger),
+                    "first_seen": {},
                     "card_hashes": {name: digest(files["characters/" + name + ".md"])
                                     for name in set(names) | ({"pov"} if partitions["pov"] else set())},
                     "segments": deepcopy(blocks), "packet": None, "audit_due": 0,
@@ -707,6 +710,33 @@ class Engine:
              "HOOK_LEDGER_CHANGED", "Story memory changed outside an authorized transaction")
         return text
 
+    def _first_seen(self, path: Path, meta: dict) -> dict[str, int]:
+        if "first_seen" in meta:
+            return dict(meta["first_seen"])
+        return self._first_seen_from_archive(self._active(path))
+
+    @staticmethod
+    def _first_seen_from_archive(active: list[dict]) -> dict[str, int]:
+        first_seen = {}
+        for row in active:
+            for name in row.get("participants", []):
+                first_seen.setdefault(name, row["turn"])
+        return first_seen
+
+    @staticmethod
+    def _author_windows(original: str, hooks: list[dict], turn: int) -> list[dict]:
+        windows = story_hooks.author_window_candidates(original, turn)
+        for item in windows:
+            matches = [h["id"] for h in hooks
+                       if h["window_end"] == item["window_end"] and
+                       h["window_start"] == item["window_start"] and
+                       (h["origin"] in item["source"] or item["source"] in h["origin"])]
+            item["tracked_hook_ids"] = matches
+            item["tracked"] = bool(matches)
+            item["verification"] = "tracked" if matches else "needs_history_review"
+            item.pop("overdue", None)
+        return windows
+
     def director_brief(self, sid: str) -> dict:
         """READ BEFORE choosing participants; never alter game time or scenes.
 
@@ -725,42 +755,27 @@ class Engine:
             original = self._read(path, "original.txt")
             need(digest(original) == meta["original_hash"], "ORIGINAL_CORRUPTED",
                  "Author original must remain intact for plot planning")
-            windows = story_hooks.author_window_candidates(original, meta["turn"])
-            for item in windows:
-                item["tracked"] = any(
-                    h["window_end"] == item["window_end"] and
-                    h["window_start"] == item["window_start"] and
-                    (h["origin"] in item["source"] or
-                     item["source"] in h["origin"])
-                    for h in hooks)
-                item["verification"] = "tracked" if item["tracked"] else "needs_history_review"
-                item.pop("overdue", None)
+            story_hooks.validate_links(hooks, arcs)
+            windows = self._author_windows(original, hooks, meta["turn"])
             display = {}
             for line in novel.splitlines():
                 match = re.match(r"^- ([a-z][a-z0-9_]{1,49}) — (.+)$", line)
                 if match and match.group(1) in cast:
                     display[match.group(1)] = match.group(2)
-            first_seen = {}
-            for row in self._active(path):
-                for name in row.get("participants", []):
-                    first_seen.setdefault(name, row["turn"])
+            first_seen = self._first_seen(path, meta)
+            state_text = self._read(path, "state.md")
+            state = json.loads(state_text)
+            overview = story_hooks.director_brief(hooks, meta["turn"], first_seen,
+                                                state["datetime"])
+            valid, priority = story_hooks.plan_ids(overview, arcs, windows)
             atomic(path / "system/meta.json", dump({
-                **meta, "director_version": meta["version"],
+                **meta, "first_seen": first_seen, "director_version": meta["version"],
                 "director_hook_hash": digest(saved),
                 "director_arc_hash": digest(arcs_text),
+                "director_state_hash": digest(state_text),
+                "director_valid_ids": sorted(valid),
+                "director_priority_ids": sorted(priority),
             }))
-            overview = story_hooks.director_brief(hooks, meta["turn"])
-            # Participation is evidence, not proof of the author's intended arrival.
-            for h in overview["unresolved_hooks"]:
-                if h["kind"] == "appearance" and len(h["participants"]) == 1:
-                    first = first_seen.get(h["participants"][0])
-                    if first is not None:
-                        h["first_recorded_participation"] = first
-                        h["deadline_state"] = "appearance_recorded_needs_review"
-                        if h["id"] in overview["author_deadlines_overdue"]:
-                            overview["author_deadlines_overdue"].remove(h["id"])
-                        if h["id"] in overview["author_windows_active"]:
-                            overview["author_windows_active"].remove(h["id"])
             for field in ("unresolved_hooks", "resolved_hooks"):
                 overview[field] = [
                     {k: v for k, v in row.items() if k not in {"origin", "last_evidence"}}
@@ -770,8 +785,10 @@ class Engine:
             return {
                 "session_id": sid, "version": meta["version"],
                 "turn": meta["turn"],
-                "state": json.loads(self._read(path, "state.md")),
+                "state": state,
                 "first_recorded_participation": first_seen,
+                "plan_required": bool(valid),
+                "plan_priority_ids": sorted(priority),
                 "author_window_candidates": windows,
                 "untracked_author_windows": [{"source_line": w["source_line"],
                                               "window_end": w["window_end"]}
@@ -789,23 +806,25 @@ class Engine:
             }
 
     def backfill_hooks(self, sid: str, expected_version: int,
-                       additions: list[dict]) -> dict:
+                       additions: list[dict], arc_repairs: list[dict] | None = None) -> dict:
         """Safe explicit migration of EXISTING sessions from exact old sources.
 
-        Does not alter approved canon, open_threads, state, history or any
+        Explicit arc_repairs can restore missing arcs. Does not alter approved canon, state, history or any
         relationship. The caller must provide real canonical/archived quotes.
         A new version invalidates any prepared packet; reprepare afterward.
         """
         with self._locked(sid) as (path, meta):
             self._version(meta, expected_version)
             need(meta["approved"], "NOT_APPROVED", "Approve canon before backfill")
-            need(isinstance(additions, list) and bool(additions),
-                 "HOOK_BACKFILL_EMPTY", "Supply proven unresolved hooks")
+            arc_repairs = [] if arc_repairs is None else arc_repairs
+            need(isinstance(additions, list) and isinstance(arc_repairs, list) and
+                 bool(additions or arc_repairs),
+                 "HOOK_BACKFILL_EMPTY", "Supply proven hooks or explicit historical arc repairs")
             active = self._active(path)
             last = meta["turn"]
             # The most recently saved turn may still be rolled back; do not
             # pin new permanent memory to an unstable source.
-            for item in additions:
+            for item in additions + arc_repairs:
                 need(isinstance(item, dict) and
                      (not meta.get("last_undo") or last == 0 or
                       (item.get("origin_turn") != last and item.get("last_turn") != last)),
@@ -820,7 +839,13 @@ class Engine:
                 old, additions, original,
                 {row["turn"]: row["narration"] for row in active},
                 last, self._cast(path))
-            need(updated != old, "HOOK_BACKFILL_UNCHANGED", "No new hooks supplied")
+            arcs_before = (self._read(path, "open_threads.md")
+                           if (path / "open_threads.md").exists() else open_threads.HEADER)
+            scenes = {row["turn"]: row["narration"] for row in active}
+            arcs_after = open_threads.backfill(arcs_before, arc_repairs, original, scenes, last)
+            story_hooks.validate_links(story_hooks.parse(updated), open_threads.parse(arcs_after))
+            need(updated != old or arcs_after != arcs_before, "HOOK_BACKFILL_UNCHANGED",
+                 "No new hooks or arc repairs supplied")
             newer = {**meta, "version": meta["version"] + 1,
                      "packet": None, "scene_review": None,
                      "hook_file_hash": digest(updated)}
@@ -831,6 +856,13 @@ class Engine:
                     prior, additions, original,
                     {row["turn"]: row["narration"] for row in active
                      if row["turn"] < last}, last - 1, self._cast(path))
+                undo["before"]["open_threads.md"] = open_threads.backfill(
+                    undo["before"].get("open_threads.md", arcs_before),
+                    arc_repairs, original,
+                    {row["turn"]: row["narration"] for row in active if row["turn"] < last},
+                    last - 1)
+                story_hooks.validate_links(story_hooks.parse(undo["before"]["hooks.md"]),
+                                           open_threads.parse(undo["before"]["open_threads.md"]))
                 newer["last_undo"] = undo
             by_turn = {row["turn"]: row for row in active}
             for h in story_hooks.parse(updated, self._cast(path)):
@@ -843,15 +875,18 @@ class Engine:
             marker = dump({
                 "kind": "hook_backfill", "turn": last,
                 "added": additions,
+                "arc_repairs": arc_repairs,
                 "ledger_sha256": digest(updated),
             }) + "\n"
             self._write(path, meta, {
                 "hooks.md": updated,
+                "open_threads.md": arcs_after,
                 "system/audit.jsonl": audit_log + marker,
             }, newer)
             return {"updated": True, "session_id": sid,
                     "version": newer["version"],
                     "added": len(additions),
+                    "arc_repairs": len(arc_repairs),
                     "unresolved": sum(h["status"] != "closed"
                                       for h in story_hooks.parse(updated))}
 
