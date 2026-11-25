@@ -18,6 +18,7 @@ from novella_v2.engine import Engine, empty_actor
 TOOLS = {
     "load_v2_instructions", "get_v2_instruction_versions", "create_v2_novel",
     "get_v2_status", "approve_v2_canon", "set_v2_opening", "add_v2_character",
+    "get_v2_director_brief", "backfill_v2_hooks",
     "get_v2_review_manifest",
     "prepare_v2_context", "read_v2_chunk", "review_v2_scene",
     "save_v2_turn", "finish_v2_audit",
