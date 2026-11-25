@@ -234,10 +234,13 @@ def author_window_candidates(original: str, turn: int) -> list[dict]:
         if not _AUTHOR_ENTRY.search(line) or "ход" not in line.casefold():
             continue
         ranges = list(_AUTHOR_RANGE.finditer(line))
-        windows = ([(int(m.group(1)), int(m.group(2)), m) for m in ranges]
-                   if ranges else
-                   [(None, int(m.group(1)), m) for m in
-                    _AUTHOR_UP_TO.finditer(line)])
+        windows = [(int(m.group(1)), int(m.group(2)), m) for m in ranges]
+        windows.extend(
+            (None, int(m.group(1)), m)
+            for m in _AUTHOR_UP_TO.finditer(line)
+            if not any(start.start() <= m.start() < start.end()
+                       for start in ranges)
+        )
         for lower, upper, match in windows:
             if upper < 1 or (lower is not None and lower > upper):
                 continue
