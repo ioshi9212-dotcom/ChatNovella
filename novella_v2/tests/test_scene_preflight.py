@@ -9,6 +9,7 @@ import unittest
 from novella_v2.engine import Engine, EngineError, empty_actor
 from novella_v2.scene_preflight import (
     is_formatted_builder, review_sections, layout_errors, report_errors,
+    review_items, rule_report_errors, messenger_layout_errors,
 )
 
 
@@ -77,11 +78,18 @@ class TestSceneReview(unittest.TestCase):
                  "note": "Проверены все применимые правила этого раздела."}
                 for name in review_sections(self.skin)]
 
-    def review(self, p, narration, checks=None):
+    def rule_checks(self):
+        return [{"id": rule["id"], "result": "pass",
+                 "note": "Есть буквальная цитата из проверяемой сцены.",
+                 "evidence": "Она оглянулась на шум за окном."}
+                for rule in review_items(self.skin)]
+
+    def review(self, p, narration, checks=None, rule_checks=None):
         return self.engine.review_scene(
             self.sid, p["version"], p["packet_id"], "review-1",
             sha256(self.skin.encode("utf-8")).hexdigest(), narration,
-            self.checks() if checks is None else checks)
+            self.checks() if checks is None else checks,
+            self.rule_checks() if rule_checks is None else rule_checks)
 
     def save(self, p, narration):
         return self.engine.commit(self.sid, {
@@ -102,6 +110,22 @@ class TestSceneReview(unittest.TestCase):
         self.assertIn("КОНЕЦ СЦЕНЫ", sections)
         self.assertTrue(any("Не проверен раздел" in e
                             for e in report_errors(self.skin, self.checks()[:-1])))
+
+    def test_messenger_plain_text_is_rejected_by_server(self):
+        simple = "**Мариса** (23:45): Привет, ты дома?"
+        self.assertTrue(messenger_layout_errors(self.skin, simple))
+        formatted = "> **Мариса** (23:45)\n> Привет, ты дома?"
+        self.assertEqual(messenger_layout_errors(self.skin, formatted), [])
+        self.assertFalse(messenger_layout_errors(self.skin, "Телефон завибрировал."))
+
+    def test_cannot_skip_individual_rule_or_fake_evidence(self):
+        self.assertGreater(len(review_items(self.skin)), 50)
+        items = self.rule_checks()
+        self.assertTrue(any("Не проверено правило" in x for x in
+                            rule_report_errors(self.skin, scene(), items[:-1])))
+        items[0]["evidence"] = "В сцене нет такой цитаты."
+        self.assertTrue(any("Нет точной цитаты" in x for x in
+                            rule_report_errors(self.skin, scene(), items)))
 
     def test_formatted_scene_passes_layout(self):
         self.assertEqual(layout_errors(self.skin, scene(), 1), [])
