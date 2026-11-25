@@ -14,7 +14,10 @@ it empty. Rules describe mechanics; they must not dictate literary style.
 For new setup, preserve the entire author's original verbatim. Assign all text
 exactly once with ordered unique anchors or contiguous Unicode ranges. Preserve
 English character IDs. Supply directed familiarity and only canon-supported
-initial relationships/threads. Prepare kind=canon and read all chunks. Show the
+initial relationships/threads AND every canon-supported initial_hooks item
+with its exact author quote, stable arc_id, independent ID and explicit
+window_start/window_end ONLY when stated literally in the source. Prepare
+kind=canon and read all chunks. Show the
 complete proposed questionnaire and obtain explicit approval of canon_hash
 before approve_v2_canon, opening, or any gameplay. A deployment acceptance test
 may approve its own clearly isolated synthetic test fixture, never a real game.
@@ -44,6 +47,12 @@ progressed, blocked or resolved, with a literal quote from the FINAL scene.
 Updating one hook must NEVER erase any sibling hook or NPC objective.
 Offscreen events must actually be narrated to count; do not invent unseen
 progress and claim it happened.
+
+The director brief also extracts literal author timing clauses from
+original.txt as author_window_candidates even when an older session has no
+hooks.md yet. These are SOURCE-QUOTED HINTS, not automatically persisted
+facts or mandatory instant appearances. Surface overdue untracked author
+windows instead of ignoring them; use evidence-based backfill when asked.
 
 For EXISTING sessions, hooks.md may legitimately be missing; do not wipe
 or automatically replace old history. When the reader explicitly requests
