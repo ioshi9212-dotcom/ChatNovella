@@ -27,7 +27,7 @@ def review_sections(skin: str) -> list[str]:
     for line in skin.splitlines():
         stripped = line.strip()
         found = _HEADING.match(stripped)
-        numbered = re.match(r"^###\\s*\\d+\\.\\s*(.+?)\\s*$", stripped)
+        numbered = re.match(r"^###\s*\d+\.\s*(.+?)\s*$", stripped)
         if found or numbered:
             label = (found or numbered).group(1).strip()
             if label not in result:
