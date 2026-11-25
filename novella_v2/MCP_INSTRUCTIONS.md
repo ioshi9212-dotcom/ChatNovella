@@ -74,18 +74,24 @@ Never fabricate evidence, invent deadlines, change original canon, or cite the
 still-rollbackable last turn. Backfill survives a later rollback. This action
 changes session version; call director again and reprepare afterward.
 
-At the 15/60 audit, when any hooks, arcs or literal author windows exist,
-supply report.story mapping EVERY hook (including closed) to a specific note
-under 'hook:<id>', EVERY unresolved arc under 'arc:<id>', and EVERY ID from
-audit_author_windows ('window:...') to its history-based assessment. Check
-not-started lines, actual completion, overdue appearances, waiting conditions,
-stagnating NPC goals, and genre strands. All unresolved hooks and canon windows
-are covered even when the ledger is empty. Do not force an
-event merely because the audit flags a long gap. Check independent quote
-provenance, and preserve existing user choices and storyline pace.
+At the 15/60 audit, report.story must cover EXACTLY audit_story_ids from
+the packet: every live hook, open arc, author window, current consequences
+and a rotating sample of old closures at 60. Server checks all ledger
+records and archive evidence at every audit. Do not claim semantic proof
+from a literal quote alone. Preserve user choices and storyline pace.
 
-For each new turn choose one stable request_id. Call prepare_v2_context with
-that ID, exact reader_text and real participants. If already_committed_duplicate
+For each new turn choose one stable request_id. After the director brief,
+provide story_plan to prepare_v2_context: focus_ids (known arc:/hook:/window:
+IDs, may be empty), direction, world, deferred (short concrete reasoning),
+priority (map every plan_priority_ids ID to an actual decision or grounded
+reason to defer). Required when plot records/windows exist; recommended even
+when empty. Plan is not an event; never force an encounter or progress quota.
+Use trigger date:YYYY-MM-DD, turn:N, hook:ID for known waiting conditions,
+otherwise text. Due does not mean forced. Closed results remain in
+resolved_outcomes. Record actual consequences as separate hooks. Every open
+hook needs an existing open arc; repair missing arcs with explicit historical
+arc_repairs (id,title,status,note,source,origin_turn) in backfill_v2_hooks.
+Call prepare_v2_context with that ID, exact reader_text and real participants. If already_committed_duplicate
 is true, return its saved narration without generating or saving another turn.
 If reused_pending_packet is true, continue that packet and read ONLY its
 unread_chunk_indices. Retain session_id, request_id, packet_id and read progress.
