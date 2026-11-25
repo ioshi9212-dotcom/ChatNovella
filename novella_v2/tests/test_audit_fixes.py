@@ -44,6 +44,8 @@ class AuditFixes(unittest.TestCase):
         return self.store.root / self.sid / name
 
     def packet(self, reader, people=None, kind="turn"):
+        if kind == "turn":
+            self.store.director_brief(self.sid)
         p = self.store.prepare(self.sid, reader, people or ["adrian"], kind)
         for i in range(p["chunk_count"]):
             self.store.read_chunk(self.sid, p["packet_id"], i)
