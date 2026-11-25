@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import date, datetime
 
 HEADER = "# Сюжетные крючки и обязательства\n"
 MAX_HOOKS = 4096  # safety ceiling, not a storytelling quota
@@ -35,6 +36,45 @@ def short(value: object, length: int, label: str) -> str:
     check(isinstance(value, str) and 0 < len(value.strip()) <= length
           and "\n" not in value and "\r" not in value, "Invalid " + label)
     return value.strip()
+
+
+def validate_trigger(value: str) -> None:
+    short(value, 300, "trigger")
+    if value.startswith("date:"):
+        try:
+            check(date.fromisoformat(value[5:]).isoformat() == value[5:],
+                  "Use date:YYYY-MM-DD")
+        except ValueError as exc:
+            raise HookProblem("Use date:YYYY-MM-DD") from exc
+    elif value.startswith("turn:"):
+        check(bool(re.fullmatch(r"[1-9][0-9]{0,7}", value[5:])), "Use turn:N")
+    elif value.startswith("hook:"):
+        check(bool(IDENT.fullmatch(value[5:])), "Use hook:stable_hook_id")
+
+
+def validate_links(items: list[dict], arcs: list[dict]) -> None:
+    arc_ids = {a["id"] for a in arcs}
+    by_id = {h["id"]: h for h in items}
+    check(all(h["status"] == "closed" or h["arc_id"] in arc_ids
+              for h in items), "Open hook requires an existing open arc")
+    dependencies = {}
+    for h in items:
+        trigger = h["trigger"] or ""
+        if h["status"] != "closed" and trigger.startswith("hook:"):
+            target = trigger[5:]
+            check(target in by_id and target != h["id"],
+                  "Hook condition references a missing hook or itself")
+            if by_id[target]["status"] != "closed":
+                dependencies[h["id"]] = target
+    done = set()
+    for start in dependencies:
+        seen = set()
+        cursor = start
+        while cursor in dependencies and cursor not in done:
+            check(cursor not in seen, "Circular hook conditions")
+            seen.add(cursor)
+            cursor = dependencies[cursor]
+        done.update(seen)
 
 
 def clean(row: dict, cast: set[str] | None = None) -> dict:
@@ -65,6 +105,8 @@ def clean(row: dict, cast: set[str] | None = None) -> dict:
         if row["kind"] == "appearance":
             check(len(participants) == 1 and participants[0] != "pov",
                   "Track each timed NPC appearance separately")
+    if row["trigger"] is not None:
+        validate_trigger(row["trigger"])
     if row["status"] == "closed":
         check(row["last_turn"] > 0 and len(row["detail"].strip()) >= 12,
               "Closed hooks need a documented outcome in a real scene")
@@ -176,12 +218,14 @@ def apply(text: str, updates: list[dict], narration: str, turn: int,
             changed = (row["status"] != old["status"] or
                        row["detail"].strip() != old["detail"] or
                        sorted(row["participants"]) != old["participants"] or
-                       row["trigger"] != old["trigger"])
+                       (row["trigger"] is not None and row["trigger"] != old["trigger"]))
             check(changed, "Hook needs real status/content/actor/trigger progress; "
                   "a new turn or quote alone cannot reset its age")
             new = {**old, "status": row["status"], "detail": row["detail"],
                    "participants": row["participants"], "trigger": row["trigger"],
                    "last_evidence": row["source"], "last_turn": turn}
+            if row["trigger"] is None:
+                new["trigger"] = old["trigger"]
         if row["status"] == "closed":
             check(len(row["detail"].strip()) >= 12 and
                   row["detail"].strip() != old["detail"],
@@ -300,13 +344,18 @@ def author_window_candidates(original: str, turn: int) -> list[dict]:
     return candidates
 
 
-def director_brief(items: list[dict], turn: int) -> dict:
-    """Compact planning index. Closed obligations remain permanently recorded."""
+def director_brief(items: list[dict], turn: int,
+                   first_seen: dict[str, int] | None = None,
+                   world_datetime: str | None = None) -> dict:
+    """One assessment for director, turn packet and audit; no invented events."""
     upcoming = turn + 1
+    first_seen = first_seen or {}
+    by_id = {h["id"]: h for h in items}
+    world_date = datetime.fromisoformat(world_datetime).date() if world_datetime else None
     rows, closed = [], []
     for item in items:
         deadline = item["window_end"]
-        state = "awaiting_condition" if item["status"] == "blocked" and item["trigger"] else "none"
+        state, condition = "none", "none"
         if item["status"] == "closed":
             if deadline is not None:
                 state = ("fulfilled_late" if item["last_turn"] > deadline else
@@ -314,7 +363,7 @@ def director_brief(items: list[dict], turn: int) -> dict:
                          item["last_turn"] < item["window_start"] else "fulfilled")
             else:
                 state = "resolved"
-            closed.append({**item, "deadline_state": state})
+            closed.append({**item, "deadline_state": state, "condition_state": condition})
             continue
         if deadline is not None:
             if deadline < upcoming:
@@ -323,10 +372,38 @@ def director_brief(items: list[dict], turn: int) -> dict:
                 state = "author_window_open"
             else:
                 state = "author_window_future"
-        rows.append({**item, "deadline_state": state,
-                     "turns_since_progress": max(0, turn - item["last_turn"])})
+        first = None
+        if item["kind"] == "appearance" and len(item["participants"]) == 1:
+            first = first_seen.get(item["participants"][0])
+            if first is not None:
+                state = "appearance_recorded_needs_review"
+        trigger = item["trigger"] or ""
+        if item["status"] == "blocked":
+            if trigger.startswith("date:"):
+                condition = ("condition_review" if world_date is None else
+                             "condition_due" if world_date >= date.fromisoformat(trigger[5:])
+                             else "awaiting_condition")
+            elif trigger.startswith("turn:"):
+                condition = ("condition_due" if upcoming >= int(trigger[5:])
+                             else "awaiting_condition")
+            elif trigger.startswith("hook:"):
+                target = by_id.get(trigger[5:])
+                condition = ("condition_review" if target is None else
+                             "condition_due" if target["status"] == "closed"
+                             else "awaiting_condition")
+            else:
+                condition = ("condition_review" if not trigger or turn - item["last_turn"] >= 20
+                             else "awaiting_condition")
+            if state == "none":
+                state = condition
+        row = {**item, "deadline_state": state, "condition_state": condition,
+               "turns_since_progress": max(0, turn - item["last_turn"])}
+        if first is not None:
+            row["first_recorded_participation"] = first
+        rows.append(row)
     rows.sort(key=lambda x: (x["deadline_state"] != "overdue",
               x["deadline_state"] != "author_window_open",
+              x["condition_state"] != "condition_due",
               -x["turns_since_progress"], x["arc_id"], x["id"]))
     return {
         "upcoming_turn": upcoming,
@@ -334,9 +411,70 @@ def director_brief(items: list[dict], turn: int) -> dict:
         "resolved_hooks": closed,
         "author_deadlines_overdue": [x["id"] for x in rows if x["deadline_state"] == "overdue"],
         "author_windows_active": [x["id"] for x in rows if x["deadline_state"] == "author_window_open"],
+        "appearance_review": [x["id"] for x in rows if x["deadline_state"] == "appearance_recorded_needs_review"],
+        "conditions_due": [x["id"] for x in rows if x["condition_state"] == "condition_due"],
+        "conditions_review": [x["id"] for x in rows if x["condition_state"] == "condition_review"],
         "stale_hooks": [x["id"] for x in rows if x["turns_since_progress"] >= 20
-                        and x["status"] != "blocked"
+                        and x["condition_state"] != "awaiting_condition"
                         and x["deadline_state"] != "author_window_future"],
         "note": ("Director-only facts. Staleness is a diagnostic, not a quota. "
                  "Never invent retroactive scenes or force arbitrary appearances."),
     }
+
+
+def outcome_index(items: list[dict]) -> list[dict]:
+    return [{k: h[k] for k in ("id", "arc_id", "title", "kind", "detail", "last_turn")}
+            for h in items if h["status"] == "closed"]
+
+
+def audit_selection(items: list[dict], arcs: list[dict], turn: int,
+                    level: int, cursor: int = 0) -> tuple[list[dict], int]:
+    active_arcs = {a["id"] for a in arcs}
+    selected, archive = [], []
+    for h in items:
+        if (h["status"] != "closed" or h["arc_id"] in active_arcs
+                or h["window_end"] is not None or h["kind"] == "appearance"
+                or h["last_turn"] > turn - 60):
+            selected.append(h)
+        else:
+            archive.append(h)
+    if level == 60 and archive:
+        archive.sort(key=lambda h: h["id"])
+        start = cursor % len(archive)
+        count = min(64, len(archive))
+        selected.extend(archive[(start + i) % len(archive)] for i in range(count))
+        cursor = (start + count) % len(archive)
+    return selected, cursor
+
+
+def plan_ids(overview: dict, arcs: list[dict], windows: list[dict]) -> tuple[set[str], set[str]]:
+    valid = {"arc:" + a["id"] for a in arcs}
+    valid.update("hook:" + h["id"] for h in overview["unresolved_hooks"])
+    valid.update(w["id"] for w in windows)
+    priority = {"hook:" + ident for key in ("author_deadlines_overdue",
+                "author_windows_active", "appearance_review", "conditions_due",
+                "conditions_review") for ident in overview[key]}
+    priority.update(w["id"] for w in windows if not w.get("tracked") and
+                    (w["window_start"] is None or w["window_start"] <= overview["upcoming_turn"]))
+    return valid, priority
+
+
+def validate_plan(plan: dict | None, valid: set[str], priority: set[str]) -> dict | None:
+    if plan is None:
+        check(not valid, "STORY_PLAN_REQUIRED: provide a short plan for the current plot")
+        return None
+    check(isinstance(plan, dict) and set(plan) ==
+          {"focus_ids", "direction", "world", "deferred", "priority"},
+          "Story plan needs focus_ids, direction, world, deferred, priority")
+    focus = plan["focus_ids"]
+    check(isinstance(focus, list) and len(focus) <= 12 and
+          all(isinstance(x, str) and x in valid for x in focus) and
+          len(set(focus)) == len(focus), "Story plan focus must reference known IDs")
+    decisions = plan["priority"]
+    check(isinstance(decisions, dict) and set(decisions) == priority,
+          "Story plan must address every currently flagged obligation/condition")
+    for note in [plan["direction"], plan["world"], plan["deferred"], *decisions.values()]:
+        check(isinstance(note, str) and len(note.strip()) >= 8,
+              "Story plan requires a concrete short explanation")
+        short(note, 500, "story plan explanation")
+    return plan
