@@ -892,7 +892,8 @@ class Engine:
 
     def prepare(self, sid: str, reader_text: str = "",
                 participants: list[str] | None = None, kind: str = "turn",
-                request_id: str | None = None) -> dict:
+                request_id: str | None = None,
+                story_plan: dict | None = None) -> dict:
         need(kind in ("turn", "audit", "canon"), "CONTEXT_KIND", "Unsupported context kind")
         need(isinstance(reader_text, str), "INPUT_TEXT", "Reader input must be text")
         need(request_id is None or (isinstance(request_id, str) and
@@ -924,7 +925,8 @@ class Engine:
                 open_threads.parse(arcs_text)
                 need(meta.get("director_version") == meta["version"] and
                      meta.get("director_hook_hash") == digest(ledger) and
-                     meta.get("director_arc_hash") == digest(arcs_text),
+                     meta.get("director_arc_hash") == digest(arcs_text) and
+                     meta.get("director_state_hash") == digest(self._read(path, "state.md")),
                      "DIRECTOR_REQUIRED", "Read director brief before preparing a new scene")
                 validate_state(state, cast, meta["turn"])
                 need(state["location"] != "НЕ ЗАДАНА", "OPENING_MISSING",
@@ -944,10 +946,22 @@ class Engine:
             need(relevant <= cast, "UNKNOWN_CHARACTER", "Character not registered in novel")
             signature = self._source_signature(path, relevant, kind)
             pending = meta.get("packet")
+            if kind == "turn":
+                if (story_plan is None and pending and pending.get("version") == meta["version"]
+                        and pending.get("request_id") == request_id
+                        and pending.get("reader_text") == reader_text):
+                    story_plan = pending.get("story_plan")
+                story_plan = story_hooks.validate_plan(story_plan,
+                    set(meta.get("director_valid_ids", [])), set(meta.get("director_priority_ids", [])))
+            else:
+                need(story_plan is None, "STORY_PLAN_KIND", "Plan belongs only to game turns")
             if (pending and pending["version"] == meta["version"] and
                 pending["kind"] == kind and pending["reader_text"] == reader_text and
                 pending["participants"] == sorted(relevant) and
                 pending.get("request_id") == request_id and
+                 pending.get("story_plan") == story_plan and
+                 (kind != "turn" or pending.get("director_version") == meta["version"]) and
+                 (kind != "audit" or "audit_story_ids" in pending) and
                 pending.get("source_signature") == signature and
                 pending.get("packet_stamp") == self._packet_stamp(path)):
                 return self._manifest(pending, meta["audit_due"], reused=True)
@@ -1006,27 +1020,44 @@ class Engine:
             if kind != "canon":
                 files["knowledge/pov.md"] = self._read(path, "knowledge/pov.md")
             recent = [] if kind == "canon" else _recent_turns(path, 15 if kind == "audit" else 3)
-            plot_health = story_hooks.director_brief(
-                story_hooks.parse(files["hooks.md"], cast), meta["turn"])
-            audit_windows = (story_hooks.author_window_candidates(
-                self._read(path, "original.txt"), meta["turn"]) if kind == "audit" else [])
+            hook_rows = story_hooks.parse(ledger, cast)
+            arcs = open_threads.parse(files["open_threads.md"])
+            story_hooks.validate_links(hook_rows, arcs)
+            plot_health = story_hooks.director_brief(hook_rows, meta["turn"],
+                self._first_seen(path, meta), state["datetime"])
+            audit_windows = (self._author_windows(self._read(path, "original.txt"),
+                hook_rows, meta["turn"]) if kind == "audit" else [])
+            audit_ids = []
             if kind == "turn":
-                # Closed non-author mysteries stay in persistent memory and audit,
-                # not in every writing packet.
+                # Keep full live hooks and author completions. Every ordinary
+                # resolved fact remains visible via the compact outcome index.
                 files["hooks.md"] = story_hooks.render([
-                    h for h in story_hooks.parse(ledger, cast)
-                    if h["status"] != "closed" or h["window_end"] is not None
-                    or h["kind"] == "appearance"], cast)
+                    h for h in hook_rows if h["status"] != "closed"
+                    or h["window_end"] is not None or h["kind"] == "appearance"], cast)
+            elif kind == "audit":
+                review_rows, _ = story_hooks.audit_selection(
+                    hook_rows, arcs, meta["turn"], meta["audit_due"],
+                    meta.get("story_audit_cursor", 0))
+                files["hooks.md"] = story_hooks.render(review_rows, cast)
+                audit_ids = sorted({"hook:" + h["id"] for h in review_rows} |
+                                   {"arc:" + a["id"] for a in arcs} |
+                                   {w["id"] for w in audit_windows})
             payload = dump({"kind": kind, "reader_text": reader_text,
                             "audit_due": meta["audit_due"], "participants": sorted(relevant),
                             "instructions_mode": "loaded_once_per_chat",
                             "files": files, "recent_scenes": recent,
-                             "audit_author_windows": [{k: v for k, v in w.items() if k != "overdue"}
-                                                      for w in audit_windows],
-                             "story_health": {
-                                 "overdue_hook_ids": plot_health["author_deadlines_overdue"],
-                                  "active_author_window_ids": plot_health["author_windows_active"],
-                                  "stale_hook_ids": plot_health["stale_hooks"]}})
+                            "story_plan": story_plan,
+                            "resolved_outcomes": story_hooks.outcome_index(hook_rows)
+                                if kind == "turn" else [],
+                            "audit_author_windows": audit_windows,
+                            "audit_story_ids": audit_ids,
+                            "story_health": {
+                                "overdue_hook_ids": plot_health["author_deadlines_overdue"],
+                                "active_author_window_ids": plot_health["author_windows_active"],
+                                "appearance_review_ids": plot_health["appearance_review"],
+                                "conditions_due_ids": plot_health["conditions_due"],
+                                "conditions_review_ids": plot_health["conditions_review"],
+                                "stale_hook_ids": plot_health["stale_hooks"]}})
             content_chunks = chunks(payload)
             offsets = []
             position = 0
@@ -1038,6 +1069,8 @@ class Engine:
             packet = {"id": pid, "version": meta["version"], "kind": kind,
                       "reader_text": reader_text, "participants": sorted(relevant),
                       "request_id": request_id, "source_signature": signature,
+                      "director_version": meta["version"] if kind == "turn" else None,
+                      "story_plan": story_plan, "audit_story_ids": audit_ids,
                       "hashes": [digest(c) for c in content_chunks], "received": [],
                       "offsets": offsets, "sha256": digest(payload)}
             atomic(path / "system/packet.json", payload)
@@ -1176,6 +1209,8 @@ class Engine:
             need(meta["approved"] and not meta["audit_due"], "AUDIT_GATE",
                  "Approval or audit required")
             packet = self._receipt(meta, data["packet_id"], data["chunk_hashes"], "turn")
+            need(packet.get("director_version") == meta["version"], "DIRECTOR_REQUIRED",
+                 "Prepare a new director-bound packet before saving")
             need(packet.get("packet_stamp") == self._packet_stamp(path),
                  "PACKET_CHANGED", "Prepared context bytes changed before commit")
             need(packet.get("request_id") is None or
@@ -1275,7 +1310,9 @@ class Engine:
             need(not any(h["arc_id"] in closed_arcs for h in remaining_hooks),
                  "ARC_HAS_OPEN_HOOKS",
                  "An arc cannot close while independent unresolved hooks "
-                 "remain. Resolve or move every surviving hook with evidence.")
+                 "remain. Resolve the surviving hooks with evidence or leave the arc open.")
+            story_hooks.validate_links(story_hooks.parse(after_hooks, cast),
+                                       open_threads.parse(after_threads))
             need(isinstance(data["relations"], list), "RELATION_CHANGES", "Relations must be a list")
             for change in data["relations"]:
                 if isinstance(change, dict):
@@ -1357,16 +1394,23 @@ class Engine:
                       "events": data["events"], "relations": data["relations"],
                       "thread_updates": thread_changes,
                       "hook_updates": hook_changes,
+                      "story_plan": packet.get("story_plan"),
                       "warnings": warnings}
             due = 60 if (meta["turn"] + 1) % 60 == 0 else \
                   15 if (meta["turn"] + 1) % 15 == 0 else 0
+            first_seen_before = self._first_seen(path, meta)
+            first_seen_after = dict(first_seen_before)
+            for name in used:
+                first_seen_after.setdefault(name, meta["turn"] + 1)
             new = deepcopy(meta)
             new.update(version=meta["version"] + 1, turn=meta["turn"] + 1,
+                       first_seen=first_seen_after,
                        scene_review=None, relationship_file_hash=digest(after_rel),
                         hook_file_hash=digest(after_hooks),
                        audit_due=due, packet=None,
                        last_undo={"request_id": req, "before": before,
                                   "prior_turn": meta["turn"],
+                                  "prior_first_seen": first_seen_before,
                                   "prior_audit_due": meta["audit_due"]})
             result = {"saved": True, "session_id": sid, "turn": new["turn"],
                       "version": new["version"], "audit_due": due,
@@ -1401,6 +1445,10 @@ class Engine:
                        audit_due=undo["prior_audit_due"],
                         hook_file_hash=digest(files.get("hooks.md", self._hook_ledger(path, meta))),
                        last_undo=None, packet=None)
+            if "prior_first_seen" in undo:
+                new["first_seen"] = undo["prior_first_seen"]
+            else:
+                new.pop("first_seen", None)  # legacy undo; rebuild from active archive
             new["requests"][request_id]["reverted"] = True
             self._write(path, meta, files, new,
                         appends={"history.jsonl": marker})
