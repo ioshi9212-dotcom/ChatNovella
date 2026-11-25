@@ -54,6 +54,8 @@ class TestV2Integrity(unittest.TestCase):
         return self.root / "storage" / self.sid / filename
 
     def packet(self, reader="действие", participants=None, kind="turn"):
+        if kind == "turn":
+            self.engine.director_brief(self.sid)
         p = self.engine.prepare(self.sid, reader, participants or ["adrian"], kind)
         values = []
         for n in range(p["chunk_count"]):
@@ -161,6 +163,7 @@ class TestV2Integrity(unittest.TestCase):
         self.assertEqual(rows[0]["narration"], scene)
 
     def test_missing_chunk_receipt_blocks_save(self):
+        self.engine.director_brief(self.sid)
         p = self.engine.prepare(self.sid, "действие", ["adrian"])
         if p["chunk_count"] > 1:
             self.engine.read_chunk(self.sid, p["packet_id"], 0)
