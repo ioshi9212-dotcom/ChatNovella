@@ -1,0 +1,20 @@
+{
+  "interface": {
+    "capabilities": [],
+    "category": "Other",
+    "defaultPrompt": null,
+    "developerName": "App developer",
+    "displayName": "ChatNovella V2",
+    "longDescription": "\u041d\u043e\u0432\u0435\u043b\u043b\u044b V2 \u043d\u0430 NovellaChat2: \u0441\u0435\u0441\u0441\u0438\u0438 NV2_, \u043a\u0430\u043d\u043e\u043d, \u043f\u0430\u043c\u044f\u0442\u044c NPC, \u043e\u0442\u043d\u043e\u0448\u0435\u043d\u0438\u044f \u0438 \u043e\u0442\u043a\u0440\u044b\u0442\u044b\u0435 \u0430\u0440\u043a\u0438.",
+    "shortDescription": "\u041d\u043e\u0432\u0435\u043b\u043b\u044b V2 \u043d\u0430 NovellaChat2: \u0441\u0435\u0441\u0441\u0438\u0438 NV2_, \u043a\u0430\u043d\u043e\u043d, \u043f\u0430\u043c\u044f\u0442\u044c NPC, \u043e\u0442\u043d\u043e\u0448\u0435\u043d\u0438\u044f \u0438 \u043e\u0442\u043a\u0440\u044b\u0442\u044b\u0435 \u0430\u0440\u043a\u0438."
+  },
+  "apps": "./.app.json",
+  "name": "dev-6b050b144fe4819189e57c6db7c6da1e",
+  "version": "1.2.0",
+  "description": "\u041d\u043e\u0432\u0435\u043b\u043b\u044b V2 \u043d\u0430 NovellaChat2: \u0441\u0435\u0441\u0441\u0438\u0438 NV2_, \u043a\u0430\u043d\u043e\u043d, \u043f\u0430\u043c\u044f\u0442\u044c NPC, \u043e\u0442\u043d\u043e\u0448\u0435\u043d\u0438\u044f \u0438 \u043e\u0442\u043a\u0440\u044b\u0442\u044b\u0435 \u0430\u0440\u043a\u0438.",
+  "author": {
+    "name": "App developer"
+  },
+  "keywords": [],
+  "skills": "./skills"
+}
