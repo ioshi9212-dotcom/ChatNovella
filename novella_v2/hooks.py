@@ -236,6 +236,9 @@ def backfill(text: str, additions: list[dict], original: str,
                           "window_start", "window_end"):
                 check(entry[field] == existing[field],
                       "Reopening must preserve the original hook identity and source")
+            if existing["kind"] == "appearance":
+                check(entry["participants"] == existing["participants"],
+                      "Reopening cannot change the NPC of an appearance obligation")
         current[row["id"]] = clean(entry, cast)
     return render(list(current.values()), cast)
 
@@ -283,6 +286,7 @@ def author_window_candidates(original: str, turn: int) -> list[dict]:
             stop = min(len(line), match.end() + 140)
             excerpt = line[start:stop]
             candidates.append({
+                "id": f"window:{line_no}:{match.start()}",
                 "source_line": line_no, "source": excerpt,
                 "window_start": lower, "window_end": upper,
                 "window_elapsed": turn + 1 > upper,
@@ -297,7 +301,7 @@ def director_brief(items: list[dict], turn: int) -> dict:
     rows, closed = [], []
     for item in items:
         deadline = item["window_end"]
-        state = "none"
+        state = "awaiting_condition" if item["status"] == "blocked" and item["trigger"] else "none"
         if item["status"] == "closed":
             if deadline is not None:
                 state = ("fulfilled_late" if item["last_turn"] > deadline else
@@ -325,7 +329,9 @@ def director_brief(items: list[dict], turn: int) -> dict:
         "resolved_hooks": closed,
         "author_deadlines_overdue": [x["id"] for x in rows if x["deadline_state"] == "overdue"],
         "author_windows_active": [x["id"] for x in rows if x["deadline_state"] == "author_window_open"],
-        "stale_hooks": [x["id"] for x in rows if x["turns_since_progress"] >= 20],
+        "stale_hooks": [x["id"] for x in rows if x["turns_since_progress"] >= 20
+                        and x["status"] != "blocked"
+                        and x["deadline_state"] != "author_window_future"],
         "note": ("Director-only facts. Staleness is a diagnostic, not a quota. "
                  "Never invent retroactive scenes or force arbitrary appearances."),
     }
