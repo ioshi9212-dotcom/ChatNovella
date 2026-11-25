@@ -164,10 +164,15 @@ def apply(text: str, updates: list[dict], narration: str, turn: int,
             for field in ("window_start", "window_end"):
                 check(row[field] in (None, old[field]),
                       "Cannot rewrite author deadline")
+            changed = (row["status"] != old["status"] or
+                       row["detail"].strip() != old["detail"] or
+                       sorted(row["participants"]) != old["participants"] or
+                       row["trigger"] != old["trigger"])
+            check(changed, "Hook needs real status/content/actor/trigger progress; "
+                  "a new turn or quote alone cannot reset its age")
             new = {**old, "status": row["status"], "detail": row["detail"],
                    "participants": row["participants"], "trigger": row["trigger"],
                    "last_evidence": row["source"], "last_turn": turn}
-            check(new != old, "Hook must materially change")
         if row["status"] == "closed":
             del before[row["id"]]
         else:
