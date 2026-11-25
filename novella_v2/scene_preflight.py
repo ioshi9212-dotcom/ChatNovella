@@ -52,8 +52,15 @@ def review_items(skin: str) -> list[dict]:
             continue
         numbered = re.match(r"^###\s*\d+\.\s*(.+?)\s*$", line)
         named = _HEADING.match(line)
-        if numbered or named:
-            current = (numbered or named).group(1).strip()
+        if numbered:
+            current = numbered.group(1).strip()
+            continue
+        if named:
+            current = named.group(1).strip()
+            # "АВТОНОМИЯ ПОВ: ..." contains both a heading and many
+            # substantive rules; do not silently skip them.
+            if line[len(current) + 1:].strip():
+                result.append({"id": f"L{n}", "section": current, "text": line})
             continue
         # Descriptive fiction/legal preface is not an actionable scene rule.
         if line.startswith("{Данные правила применяются"):
