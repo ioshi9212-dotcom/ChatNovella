@@ -118,6 +118,21 @@ class TestSceneReview(unittest.TestCase):
         self.assertEqual(messenger_layout_errors(self.skin, formatted), [])
         self.assertFalse(messenger_layout_errors(self.skin, "Телефон завибрировал."))
 
+    def test_server_rejects_plain_sms_even_with_all_rules_marked_pass(self):
+        p = self.packet()
+        plain = scene().replace(
+            "Она оглянулась на шум за окном. ",
+            "**Мариса** (23:45): Привет, ты дома?\n", 1)
+        rejected = self.review(p, plain)
+        self.assertFalse(rejected["approved"])
+        self.assertTrue(any("мессенджера" in e for e in rejected["issues"]))
+        self.assertEqual(self.engine.status(self.sid)["turn"], 0)
+        boxed = scene().replace(
+            "Она оглянулась на шум за окном. ",
+            "> **Мариса** (23:45)\\n> Привет, ты дома?\n", 1)
+        approved = self.review(p, boxed)
+        self.assertTrue(approved["approved"], approved["issues"])
+
     def test_cannot_skip_individual_rule_or_fake_evidence(self):
         self.assertGreater(len(review_items(self.skin)), 50)
         items = self.rule_checks()
