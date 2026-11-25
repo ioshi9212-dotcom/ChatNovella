@@ -18,7 +18,8 @@ from novella_v2.engine import Engine, empty_actor
 TOOLS = {
     "load_v2_instructions", "get_v2_instruction_versions", "create_v2_novel",
     "get_v2_status", "approve_v2_canon", "set_v2_opening", "add_v2_character",
-    "prepare_v2_context", "read_v2_chunk", "save_v2_turn", "finish_v2_audit",
+    "prepare_v2_context", "read_v2_chunk", "review_v2_scene",
+    "save_v2_turn", "finish_v2_audit",
     "search_v2_history", "rollback_v2_turn",
 }
 
@@ -174,7 +175,18 @@ class TestV2MCP(unittest.TestCase):
         self.assertEqual(versions["rules_sha256"], instructions["rules"]["sha256"])
         self.assertNotIn("content", json.dumps(versions))
 
+    def use_empty_synthetic_skin_for_non_literary_storage_tests(self):
+        """Legacy transaction/audit fixtures use one-sentence fake scenes.
+        The real authored builder is exercised by test_scene_preflight.py.
+        """
+        root = Path(self.tmp.name) / "empty-instructions"
+        root.mkdir()
+        (root / "rules.md").write_text("Storage-only synthetic tests", encoding="utf-8")
+        (root / "skin_builder.md").write_text("", encoding="utf-8")
+        self.engine.instructions = root
+
     def test_end_to_end_chunks_memory_arcs_duplicate_restart_and_rollback(self):
+        self.use_empty_synthetic_skin_for_non_literary_storage_tests()
         sid = self.start(long=True)
         prepared = self.tool("prepare_v2_context", session_id=sid,
                              reader_text="Шепчу Адриану, где спрятан ключ.",
@@ -219,6 +231,7 @@ class TestV2MCP(unittest.TestCase):
         self.assertEqual(json.loads((self.data / sid / "relationships.md").read_text())["npc_to_pov"]["adrian"]["доверие"], 40)
 
     def test_add_character_and_finish_required_audit(self):
+        self.use_empty_synthetic_skin_for_non_literary_storage_tests()
         sid = self.start()
         status = self.engine.status(sid)
         added = self.tool("add_v2_character", session_id=sid, expected_version=status["version"],
