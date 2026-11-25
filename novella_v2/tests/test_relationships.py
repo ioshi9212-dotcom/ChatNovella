@@ -49,6 +49,7 @@ class TestRelationships(unittest.TestCase):
                reader=None, narration=None):
         people = participants if participants is not None else ["adrian"]
         message = reader or "Слова " + str(n)
+        self.engine.director_brief(self.sid)
         p = self.engine.prepare(self.sid, message, people)
         for i in range(p["chunk_count"]):
             self.engine.read_chunk(self.sid, p["packet_id"], i)
@@ -87,6 +88,7 @@ class TestRelationships(unittest.TestCase):
         self.assertEqual(data["familiarity"].get("pov", {}).get("adrian", "unaware"), "unaware")
 
     def test_full_relationship_file_in_every_turn_and_canon_packet(self):
+        self.engine.director_brief(self.sid)
         p = self.engine.prepare(self.sid, "Сегодня", ["adrian"])
         content = json.loads("".join(self.engine.read_chunk(
             self.sid, p["packet_id"], i)["content"]
@@ -118,6 +120,7 @@ class TestRelationships(unittest.TestCase):
         meta.pop("relationship_file_hash", None)
         meta.pop("relation_rule_hash", None)
         atomic(meta_path, dump(meta))
+        self.engine.director_brief(self.sid)
         p = self.engine.prepare(self.sid, "Сегодня", ["adrian"])
         payload = json.loads("".join(self.engine.read_chunk(
             self.sid, p["packet_id"], i)["content"]
