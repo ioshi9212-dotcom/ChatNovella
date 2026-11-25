@@ -129,7 +129,7 @@ class TestSceneReview(unittest.TestCase):
         self.assertEqual(self.engine.status(self.sid)["turn"], 0)
         boxed = scene().replace(
             "Она оглянулась на шум за окном. ",
-            "> **Мариса** (23:45)\\n> Привет, ты дома?\n", 1)
+            "> **Мариса** (23:45)\n> Привет, ты дома?\n", 1)
         approved = self.review(p, boxed)
         self.assertTrue(approved["approved"], approved["issues"])
 
