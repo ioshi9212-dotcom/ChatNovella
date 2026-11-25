@@ -61,6 +61,9 @@ class HookUpdate(Model):
 class HistoricalHook(HookUpdate):
     """Backfilled source: 0=original canon, N=archived turn N."""
     origin_turn: Annotated[int, Field(ge=0)]
+    last_turn: Annotated[int, Field(ge=0)] | None = None
+    last_evidence: Annotated[str, Field(min_length=8, max_length=500)] | None = None
+    reopen: bool = False
 
 
 class Actor(Model):
