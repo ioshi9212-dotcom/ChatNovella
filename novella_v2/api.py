@@ -115,7 +115,8 @@ def review_manifest():
 def review(sid: str, body: dict):
     return store.review_scene(
         sid, body["expected_version"], body["packet_id"], body["request_id"],
-        body["skin_sha256"], body["narration"], body["checks"])
+        body["skin_sha256"], body["narration"], body["checks"],
+        body.get("rule_checks"))
 
 
 @app.post("/v2/novels/{sid}/turns")
