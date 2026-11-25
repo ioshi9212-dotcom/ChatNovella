@@ -18,6 +18,7 @@ from novella_v2.engine import Engine, empty_actor
 TOOLS = {
     "load_v2_instructions", "get_v2_instruction_versions", "create_v2_novel",
     "get_v2_status", "approve_v2_canon", "set_v2_opening", "add_v2_character",
+    "get_v2_review_manifest",
     "prepare_v2_context", "read_v2_chunk", "review_v2_scene",
     "save_v2_turn", "finish_v2_audit",
     "search_v2_history", "rollback_v2_turn",
@@ -191,6 +192,10 @@ class TestV2MCP(unittest.TestCase):
         self.assertFalse(reviewed["approved"])
         self.assertTrue(any("Не проверен раздел" in item for item in reviewed["issues"]))
         self.assertTrue(any("Шапка" in item for item in reviewed["issues"]))
+        self.assertTrue(any("Не проверено правило" in item for item in reviewed["issues"]))
+        manifest = self.tool("get_v2_review_manifest")
+        self.assertGreater(len(manifest["rules"]), 50)
+        self.assertEqual(manifest["skin_sha256"], instructions["skin_builder"]["sha256"])
         self.assertEqual(self.tool("get_v2_status", session_id=sid)["turn"], 0)
 
     def use_empty_synthetic_skin_for_non_literary_storage_tests(self):
