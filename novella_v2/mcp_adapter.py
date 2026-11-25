@@ -19,7 +19,7 @@ from starlette.concurrency import run_in_threadpool
 from .engine import Engine, EngineError
 from .mcp_models import (
     AnchorBlock, AuditReport, Checksum, Correction, RangeBlock, Relationships,
-    RequestId, ReviewCheck, SessionId, State, ThreadUpdate, Turn, Version,
+    RequestId, ReviewCheck, RuleCheck, SessionId, State, ThreadUpdate, Turn, Version,
 )
 
 
