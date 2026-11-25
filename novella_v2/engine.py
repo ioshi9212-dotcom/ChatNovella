@@ -1153,6 +1153,13 @@ class Engine:
             after_hooks, hook_changes = story_hooks.apply(
                 before_hooks, data.get("hook_updates", []),
                 data["narration"], meta["turn"] + 1, cast)
+            closed_arcs = {item["id"] for item in thread_changes
+                           if item["status"] == "closed"}
+            remaining_hooks = story_hooks.parse(after_hooks, cast)
+            need(not any(h["arc_id"] in closed_arcs for h in remaining_hooks),
+                 "ARC_HAS_OPEN_HOOKS",
+                 "An arc cannot close while independent unresolved hooks "
+                 "remain. Resolve or move every surviving hook with evidence.")
             need(isinstance(data["relations"], list), "RELATION_CHANGES", "Relations must be a list")
             for change in data["relations"]:
                 if isinstance(change, dict):
