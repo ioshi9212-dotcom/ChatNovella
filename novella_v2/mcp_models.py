@@ -64,6 +64,7 @@ class HistoricalHook(HookUpdate):
     last_turn: Annotated[int, Field(ge=0)] | None = None
     last_evidence: Annotated[str, Field(min_length=8, max_length=500)] | None = None
     reopen: bool = False
+    reconcile: bool = False
 
 
 class Actor(Model):
@@ -156,7 +157,7 @@ class AuditReport(Model):
     knowledge: Annotated[str, Field(min_length=1)]
     timeline: Annotated[str, Field(min_length=1)]
     relationships: Annotated[str, Field(min_length=1)]
-    story: dict[str, str] | None = None  # required when durable hooks exist
+    story: dict[str, str] | None = None  # required whenever hooks, arcs or author timing clauses exist
     long_term: Annotated[str, Field(min_length=1)] | None = None
 
 
