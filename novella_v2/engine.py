@@ -1265,9 +1265,31 @@ class Engine:
             required = {"continuity", "state", "knowledge", "timeline", "relationships"}
             if meta["audit_due"] == 60:
                 required |= {"long_term"}
+            story_cast = self._cast(path)
+            hook_ledger = (self._read(path, "hooks.md")
+                           if (path / "hooks.md").exists() else story_hooks.HEADER)
+            hook_rows = story_hooks.parse(hook_ledger, story_cast)
+            arc_rows = open_threads.parse(
+                self._read(path, "open_threads.md")
+                if (path / "open_threads.md").exists() else open_threads.HEADER)
+            # A populated durable ledger requires a thorough plot audit.
+            # Old sessions with only the one-line arc index remain compatible.
+            if hook_rows:
+                required.add("story")
             need(isinstance(report, dict) and set(report) == required and all(
-                 isinstance(value, str) and bool(value.strip()) for value in report.values()),
+                 isinstance(report[k], str) and bool(report[k].strip())
+                 for k in required - {"story"}),
                  "AUDIT_REPORT", "Audit must check required domains")
+            if hook_rows:
+                expected = ({"hook:" + h["id"] for h in hook_rows} |
+                            {"arc:" + a["id"] for a in arc_rows})
+                actual = report["story"]
+                need(isinstance(actual, dict) and set(actual) == expected and
+                     all(isinstance(note, str) and len(note.strip()) >= 16
+                         for note in actual.values()),
+                     "AUDIT_STORY",
+                     "Plot audit must address every unresolved hook and arc, "
+                     "including missed author appearance windows")
             need(digest(self._read(path, "original.txt")) == meta["original_hash"],
                  "ORIGINAL_CORRUPTED", "Author's original changed; audit cannot continue")
             corrections = corrections or {}
@@ -1353,6 +1375,17 @@ class Engine:
             open_threads.parse(self._read(path, "open_threads.md")
                                if (path / "open_threads.md").exists()
                                else open_threads.HEADER)
+            scenes_by_turn = {row["turn"]: row["narration"] for row in archived}
+            original = self._read(path, "original.txt")
+            for hook in hook_rows:
+                origin_text = (original if hook["origin_turn"] == 0
+                               else scenes_by_turn.get(hook["origin_turn"], ""))
+                latest_text = (original if hook["last_turn"] == 0
+                               else scenes_by_turn.get(hook["last_turn"], ""))
+                need(hook["origin"] in origin_text and
+                     hook["last_evidence"] in latest_text,
+                     "AUDIT_HOOK_PROVENANCE",
+                     "Unresolved hook has no exact original or scene evidence")
             existing_files: dict[str, str] = {}
             for old_turn in archived:
                 for fact in old_turn.get("knowledge", []):
@@ -1384,6 +1417,10 @@ class Engine:
                     need(thread["source"] in old_turn["narration"],
                          "AUDIT_THREAD_PROVENANCE",
                          "Thread change is not anchored to its saved scene")
+                for hook in old_turn.get("hook_updates", []):
+                    need(hook["source"] in old_turn["narration"],
+                         "AUDIT_HOOK_PROVENANCE",
+                         "Hook change is not anchored to its saved scene")
                 if old_turn.get("events"):
                     if "timeline.md" not in existing_files:
                         existing_files["timeline.md"] = changes.get(
@@ -1402,8 +1439,14 @@ class Engine:
             if "relationships.md" in changes:
                 new["relationship_file_hash"] = digest(changes["relationships.md"])
             self._write(path, meta, changes, new)
+            findings = story_hooks.director_brief(hook_rows, meta["turn"])
             return {"audited": True, "turn": meta["turn"],
-                    "version": new["version"], "corrections": len(trail)}
+                    "version": new["version"], "corrections": len(trail),
+                    "plot_findings": {
+                        "overdue": [h["id"] for h in findings["author_deadlines_overdue"]],
+                        "stale": [h["id"] for h in findings["stale_hooks"]],
+                        "open_hook_count": len(hook_rows),
+                        "open_arc_count": len(arc_rows)}}
 
     def history(self, sid: str, start: int = 1, end: int | None = None,
                 query: str = "") -> list[dict]:
