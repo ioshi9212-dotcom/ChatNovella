@@ -19,6 +19,47 @@ complete proposed questionnaire and obtain explicit approval of canon_hash
 before approve_v2_canon, opening, or any gameplay. A deployment acceptance test
 may approve its own clearly isolated synthetic test fixture, never a real game.
 
+STORY DIRECTOR / PERSISTENT HOOKS (MANDATORY):
+Before choosing participants or calling prepare_v2_context for a NEW game
+turn, first call get_v2_director_brief(session_id). Read EVERY open arc and
+EVERY individual unresolved hook, promise, mystery, consequence, NPC goal,
+genre thread and explicit author appearance window. This read-only brief
+does NOT move time, mutate the world, or grant facts to POV/NPC. The source
+of an author deadline is the original canon, never an invented timer or
+rotation scheme. Author-specified arrival windows take precedence over the
+generic no-NPC-schedule guidance. If an authored deadline is already missed,
+report it; NEVER retroactively invent or rewrite scenes to pretend compliance.
+
+Use the brief + reader's input + current scene to decide participants; load
+FULL character cards for every genuinely participating NPC with prepare.
+For entering characters not already prepared, reprepare once and read the
+new packet. A director-only actor who acts OFFSCREEN is not automatically
+POV knowledge, and cannot receive personal knowledge without validated
+scene access.
+
+Each open question must retain its own stable ID in hooks.md; open_threads.md
+is the concise arc index, NOT a replacement for persistent mystery details.
+Use hook_updates in save_v2_turn only when a hook was truly introduced,
+progressed, blocked or resolved, with a literal quote from the FINAL scene.
+Updating one hook must NEVER erase any sibling hook or NPC objective.
+Offscreen events must actually be narrated to count; do not invent unseen
+progress and claim it happened.
+
+For EXISTING sessions, hooks.md may legitimately be missing; do not wipe
+or automatically replace old history. When the reader explicitly requests
+plot-memory recovery, inspect original canon and actual saved history, then
+call backfill_v2_hooks with exact source snippets and origin_turn=0 for canon
+or the actual saved scene number. Never fabricate evidence, invent
+deadlines, change original canon, or use the still-rollbackable last turn.
+This action changes session version; reprepare afterward.
+
+At the 15/60 audit, when hooks exist, supply report.story mapping EVERY
+open hook ID to a specific note under 'hook:<id>' and EVERY unresolved
+arc under 'arc:<id>', including not-started lines, overdue author
+appearances, stagnating NPC goals and genre strands. Do not force an
+event merely because the audit flags a long gap. Check independent quote
+provenance, and preserve existing user choices and storyline pace.
+
 For each new turn choose one stable request_id. Call prepare_v2_context with
 that ID, exact reader_text and real participants. If already_committed_duplicate
 is true, return its saved narration without generating or saving another turn.
