@@ -862,9 +862,18 @@ class Engine:
         except relationship_store.RelationProblem as exc:
             raise EngineError("RELATION_INVALID", str(exc), 422) from exc
 
+    def scene_review_manifest(self) -> dict:
+        """Read all authored rule lines once per chat or after manual refresh."""
+        skin = self._read(self.instructions, "skin_builder.md")
+        return {
+            "skin_sha256": digest(skin),
+            "sections": scene_preflight.review_sections(skin),
+            "rules": scene_preflight.review_items(skin),
+        }
+
     def review_scene(self, sid: str, expected_version: int, packet_id: str,
                      request_id: str, skin_sha256: str, narration: str,
-                     checks: list[dict]) -> dict:
+                     checks: list[dict], rule_checks: list[dict] | None = None) -> dict:
         """Check the FULL current builder before committing a scene.
 
         This does NOT generate or repair prose. The model supplies a per-section
@@ -888,12 +897,15 @@ class Engine:
                  "Refresh the active Skin Builder; never validate with an older edition")
             sections = scene_preflight.review_sections(skin)
             problems = (scene_preflight.layout_errors(skin, narration, meta["turn"] + 1)
-                        + scene_preflight.report_errors(skin, checks))
+                        + scene_preflight.report_errors(skin, checks)
+                        + scene_preflight.rule_report_errors(skin, narration, rule_checks))
             if problems:
                 if meta.get("scene_review") is not None:
                     atomic(path / "system/meta.json", dump({**meta, "scene_review": None}))
                 return {"approved": False, "issues": problems,
-                        "required_sections": sections, "skin_sha256": actual_sha}
+                        "required_sections": sections,
+                        "required_rule_ids": [x["id"] for x in scene_preflight.review_items(skin)],
+                        "skin_sha256": actual_sha}
             receipt = {"request_id": request_id, "packet_id": packet_id,
                        "narration_sha256": digest(narration),
                        "skin_sha256": actual_sha, "version": meta["version"]}

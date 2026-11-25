@@ -145,7 +145,10 @@ class TestChatInstructions(unittest.TestCase):
             sha256(self.skin.read_bytes()).hexdigest(),
             "**Адриан** — Здравствуй.",
             [{"section": "SKIN BUILDER: ВЕСЬ ТЕКСТ", "result": "pass",
-              "note": "Вся актуальная пользовательская инструкция проверена."}])
+              "note": "Вся актуальная пользовательская инструкция проверена."}],
+            [{"id": "L1", "result": "pass",
+              "note": "Проверена авторская инструкция по сцене.",
+              "evidence": "**Адриан** — Здравствуй."}])
         result = self.engine.commit(self.sid, {
             "request_id": "chat-1", "expected_version": packet["version"],
             "packet_id": packet["packet_id"], "chunk_hashes": packet["chunk_hashes"],

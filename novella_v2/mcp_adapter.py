@@ -19,7 +19,7 @@ from starlette.concurrency import run_in_threadpool
 from .engine import Engine, EngineError
 from .mcp_models import (
     AnchorBlock, AuditReport, Checksum, Correction, RangeBlock, Relationships,
-    RequestId, ReviewCheck, SessionId, State, ThreadUpdate, Turn, Version,
+    RequestId, ReviewCheck, RuleCheck, SessionId, State, ThreadUpdate, Turn, Version,
 )
 
 
@@ -126,11 +126,20 @@ def build_mcp(engine: Callable[[], Engine]) -> FastMCP:
         """Read one UNREAD zero-based chunk and receipt. Verify its SHA-256 and joined packet hash; require all_chunks_read before commit."""
         return await call("read_chunk", session_id, packet_id, index)
 
+    @server.tool(annotations=read)
+    async def get_v2_review_manifest() -> dict[str, Any]:
+        """Get each authored Skin Builder rule with stable line ID. Call once after
+        loading instructions or when the user explicitly refreshes them.
+        The model must evaluate EVERY rule, not just section names.
+        """
+        return await call("scene_review_manifest")
+
     @server.tool(annotations=repeat)
     async def review_v2_scene(
         session_id: SessionId, expected_version: Version,
         packet_id: str, request_id: RequestId, skin_sha256: Checksum,
         narration: str, checks: list[ReviewCheck],
+        rule_checks: list[RuleCheck] | None = None,
     ) -> dict[str, Any]:
         """MANDATORY before saving an authored V2 scene. Audit EVERY section
         of the current full Skin Builder, including all individual rules.
@@ -140,7 +149,8 @@ def build_mcp(engine: Callable[[], Engine]) -> FastMCP:
         """
         return await call("review_scene", session_id, expected_version,
                           packet_id, request_id, skin_sha256, narration,
-                          [item.model_dump() for item in checks])
+                          [item.model_dump() for item in checks],
+                          [item.model_dump() for item in (rule_checks or [])])
 
     @server.tool(annotations=repeat)
     async def save_v2_turn(session_id: SessionId, turn: Turn) -> dict[str, Any]:

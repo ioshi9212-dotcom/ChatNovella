@@ -106,11 +106,17 @@ def read_chunk(sid: str, packet_id: str, index: int):
     return store.read_chunk(sid, packet_id, index)
 
 
+@app.get("/v2/scene-review-manifest")
+def review_manifest():
+    return store.scene_review_manifest()
+
+
 @app.post("/v2/novels/{sid}/review")
 def review(sid: str, body: dict):
     return store.review_scene(
         sid, body["expected_version"], body["packet_id"], body["request_id"],
-        body["skin_sha256"], body["narration"], body["checks"])
+        body["skin_sha256"], body["narration"], body["checks"],
+        body.get("rule_checks"))
 
 
 @app.post("/v2/novels/{sid}/turns")
