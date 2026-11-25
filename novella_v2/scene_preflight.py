@@ -25,9 +25,11 @@ def review_sections(skin: str) -> list[str]:
         return []
     result = ["ФОРМАТ СЦЕНЫ"] if skin.lstrip().startswith("ФОРМАТ СЦЕНЫ") else []
     for line in skin.splitlines():
-        found = _HEADING.match(line.strip())
-        if found:
-            label = found.group(1).strip()
+        stripped = line.strip()
+        found = _HEADING.match(stripped)
+        numbered = re.match(r"^###\\s*\\d+\\.\\s*(.+?)\\s*$", stripped)
+        if found or numbered:
+            label = (found or numbered).group(1).strip()
             if label not in result:
                 result.append(label)
     return result or ["SKIN BUILDER: ВЕСЬ ТЕКСТ"]
