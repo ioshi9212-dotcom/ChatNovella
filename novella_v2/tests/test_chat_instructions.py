@@ -139,6 +139,13 @@ class TestChatInstructions(unittest.TestCase):
         packet = self.packet()
         self.read_packet(packet)
         self.skin.write_text("Обновлено по команде читателя", encoding="utf-8")
+        # Even a minimal nonempty authored builder requires an explicit review.
+        self.engine.review_scene(
+            self.sid, packet["version"], packet["packet_id"], "chat-1",
+            sha256(self.skin.read_bytes()).hexdigest(),
+            "**Адриан** — Здравствуй.",
+            [{"section": "SKIN BUILDER: ВЕСЬ ТЕКСТ", "result": "pass",
+              "note": "Вся актуальная пользовательская инструкция проверена."}])
         result = self.engine.commit(self.sid, {
             "request_id": "chat-1", "expected_version": packet["version"],
             "packet_id": packet["packet_id"], "chunk_hashes": packet["chunk_hashes"],
