@@ -233,16 +233,22 @@ def author_window_candidates(original: str, turn: int) -> list[dict]:
         line = raw.strip()
         if not _AUTHOR_ENTRY.search(line) or "ход" not in line.casefold():
             continue
-        found = list(_AUTHOR_RANGE.finditer(line))
-        if found:
-            windows = [(int(m.group(1)), int(m.group(2))) for m in found]
-        else:
-            windows = [(None, int(m.group(1))) for m in _AUTHOR_UP_TO.finditer(line)]
-        for lower, upper in windows:
+        ranges = list(_AUTHOR_RANGE.finditer(line))
+        windows = ([(int(m.group(1)), int(m.group(2)), m) for m in ranges]
+                   if ranges else
+                   [(None, int(m.group(1)), m) for m in
+                    _AUTHOR_UP_TO.finditer(line)])
+        for lower, upper, match in windows:
             if upper < 1 or (lower is not None and lower > upper):
                 continue
+            # Long one-line questionnaires often list several different
+            # characters in a single paragraph. Quote the local matched
+            # clause instead of chopping the original line at 500 chars.
+            start = max(0, match.start() - 110)
+            stop = min(len(line), match.end() + 140)
+            excerpt = line[start:stop]
             candidates.append({
-                "source_line": line_no, "source": line[:500],
+                "source_line": line_no, "source": excerpt,
                 "window_start": lower, "window_end": upper,
                 "overdue": turn + 1 > upper,
             })
