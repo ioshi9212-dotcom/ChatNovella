@@ -157,6 +157,8 @@ class TestStoryHooks(unittest.TestCase):
         self.assertEqual(result["added"], 2)
         self.assertEqual(self.engine.status(sid)["turn"], 2)
         self.assertEqual(len(self.engine.history(sid)), 2)
+        log = (self.engine.root / sid / "system/audit.jsonl").read_text()
+        self.assertIn('"kind":"hook_backfill"', log)
         self.assertEqual(len(self.saved_hooks(sid)), 2)
         self.assertEqual(
             {h["id"] for h in self.engine.director_brief(sid)["unresolved_hooks"]},
