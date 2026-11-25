@@ -781,7 +781,16 @@ class Engine:
             need(updated != old, "HOOK_BACKFILL_UNCHANGED", "No new hooks supplied")
             newer = {**meta, "version": meta["version"] + 1,
                      "packet": None, "scene_review": None}
-            self._write(path, meta, {"hooks.md": updated}, newer)
+            audit_log = self._read(path, "system/audit.jsonl")
+            marker = dump({
+                "kind": "hook_backfill", "turn": last,
+                "added": [{"id": item["id"], "origin_turn": item["origin_turn"],
+                           "source": item["source"]} for item in additions],
+            }) + "\n"
+            self._write(path, meta, {
+                "hooks.md": updated,
+                "system/audit.jsonl": audit_log + marker,
+            }, newer)
             return {"updated": True, "session_id": sid,
                     "version": newer["version"],
                     "added": len(additions),
