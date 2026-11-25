@@ -948,7 +948,7 @@ class Engine:
             # Full authored Skin Builder review is a mandatory pre-save gate.
             # Synthetic fixtures without an authored format remain compatible.
             skin = self._read(self.instructions, "skin_builder.md")
-            if scene_preflight.is_formatted_builder(skin):
+            if skin.strip():
                 receipt = meta.get("scene_review") or {}
                 need(receipt.get("request_id") == req
                      and receipt.get("packet_id") == data["packet_id"]
