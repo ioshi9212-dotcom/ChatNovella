@@ -718,9 +718,9 @@ class Engine:
             cast = self._cast(path)
             saved = self._hook_ledger(path, meta)
             hooks = story_hooks.parse(saved, cast)
-            arcs = open_threads.parse(
-                self._read(path, "open_threads.md")
-                if (path / "open_threads.md").exists() else open_threads.HEADER)
+            arcs_text = (self._read(path, "open_threads.md")
+                         if (path / "open_threads.md").exists() else open_threads.HEADER)
+            arcs = open_threads.parse(arcs_text)
             novel = self._read(path, "novel.md")
             original = self._read(path, "original.txt")
             need(digest(original) == meta["original_hash"], "ORIGINAL_CORRUPTED",
@@ -747,6 +747,7 @@ class Engine:
             atomic(path / "system/meta.json", dump({
                 **meta, "director_version": meta["version"],
                 "director_hook_hash": digest(saved),
+                "director_arc_hash": digest(arcs_text),
             }))
             overview = story_hooks.director_brief(hooks, meta["turn"])
             for field in ("unresolved_hooks", "resolved_hooks"):
@@ -872,15 +873,13 @@ class Engine:
             ledger = self._hook_ledger(path, meta)
             state = json.loads(self._read(path, "state.md"))
             if kind == "turn":
-                arcs = open_threads.parse(
-                    self._read(path, "open_threads.md")
-                    if (path / "open_threads.md").exists() else open_threads.HEADER)
-                if arcs or story_hooks.parse(ledger, cast) or (
-                    story_hooks.author_window_candidates(
-                        self._read(path, "original.txt"), meta["turn"])):
-                    need(meta.get("director_version") == meta["version"] and
-                         meta.get("director_hook_hash") == digest(ledger),
-                         "DIRECTOR_REQUIRED", "Read director brief before preparing a new scene")
+                arcs_text = (self._read(path, "open_threads.md")
+                             if (path / "open_threads.md").exists() else open_threads.HEADER)
+                open_threads.parse(arcs_text)
+                need(meta.get("director_version") == meta["version"] and
+                     meta.get("director_hook_hash") == digest(ledger) and
+                     meta.get("director_arc_hash") == digest(arcs_text),
+                     "DIRECTOR_REQUIRED", "Read director brief before preparing a new scene")
                 validate_state(state, cast, meta["turn"])
                 need(state["location"] != "НЕ ЗАДАНА", "OPENING_MISSING",
                      "Set opening scene before playing")
