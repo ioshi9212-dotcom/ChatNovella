@@ -58,6 +58,34 @@ substantially changed or actually closed threads, with stable id and an exact
 source quote from narration. Otherwise use []. Closed threads leave the
 working file but remain archived. No forced deadlines or scheduled revelations.
 
+MANDATORY FULL SKIN BUILDER SCENE PREFLIGHT BEFORE EVERY SAVE:
+Draft the complete narration without publishing it. Compare that entire draft
+against EVERY line, requirement and prohibition of the currently loaded,
+authoritative Skin Builder. Do not substitute prior scenes, recent messages,
+a shortened summary or a generic scene-quality checklist for the author's text.
+Check header field order, all message/SMS visual formatting, counts/length,
+dialogue and input preservation, active POV, NPC/world autonomy, character
+cards and knowledge boundaries, genre execution, director continuity, ending,
+suggested choices, state/relationships output and ALL other authored rules.
+Check EVERY applicable instruction within EACH heading, not just the heading.
+
+For EACH actual section of the current Skin Builder provide a ReviewCheck
+{section, result: pass | not_applicable | fail, note: specific finding}
+to review_v2_scene, with request_id, packet_id, expected_version, exact
+narration and skin_sha256 from the loaded Skin Builder. Server verifies the
+complete heading set, mandatory machine-checkable layout, final narration
+digest and current Skin Builder version; review_v2_scene returns approved.
+Never call save_v2_turn without approved=true for the EXACT final text.
+If any issue is found, repair the actual draft (local format fix or full
+literary rewrite as necessary), then re-audit ALL sections and call review
+again with the corrected complete narration. At most two corrected drafts;
+if still failing do NOT save/publish a defective scene. Explain failure.
+Recompute any scene-dependent knowledge, relationship, timeline, arc and
+witness evidence from the final approved narration, not from discarded drafts.
+The server cannot verify artistic meaning; the model must make the review
+specific and faithful to the author's ENTIRE Skin Builder. Never rewrite the
+author's Skin Builder itself to satisfy the review.
+
 Commit using the ORIGINAL request_id, packet_id, chunk_hashes and reader_text.
 Publish narration ONLY after saved=true; return the confirmed saved narration.
 Identical retries must preserve the entire payload and must not create a turn.
