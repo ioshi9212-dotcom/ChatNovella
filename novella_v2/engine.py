@@ -545,6 +545,7 @@ class Engine:
                     "novel_hash": digest(novel),
                     "relation_rule_hash": digest(candidate_relations["rules"]),
                     "relationship_file_hash": digest(files["relationships.md"]),
+                    "hook_file_hash": digest(initial_hook_ledger),
                     "card_hashes": {name: digest(files["characters/" + name + ".md"])
                                     for name in set(names) | ({"pov"} if partitions["pov"] else set())},
                     "segments": deepcopy(blocks), "packet": None, "audit_due": 0,
@@ -698,6 +699,14 @@ class Engine:
                 "all_chunks_read": not unread,
                 "first_chunk_included": False}
 
+    def _hook_ledger(self, path: Path, meta: dict) -> str:
+        text = (self._read(path, "hooks.md")
+                if (path / "hooks.md").exists() else story_hooks.HEADER)
+        need(not meta.get("hook_file_hash") or
+             digest(text) == meta["hook_file_hash"],
+             "HOOK_LEDGER_CHANGED", "Story memory changed outside an authorized transaction")
+        return text
+
     def director_brief(self, sid: str) -> dict:
         """READ BEFORE choosing participants; never alter game time or scenes.
 
@@ -707,8 +716,7 @@ class Engine:
         """
         with self._locked(sid) as (path, meta):
             cast = self._cast(path)
-            saved = (self._read(path, "hooks.md")
-                     if (path / "hooks.md").exists() else story_hooks.HEADER)
+            saved = self._hook_ledger(path, meta)
             hooks = story_hooks.parse(saved, cast)
             arcs = open_threads.parse(
                 self._read(path, "open_threads.md")
@@ -721,23 +729,43 @@ class Engine:
             for item in windows:
                 item["tracked"] = any(
                     h["window_end"] == item["window_end"] and
+                    h["window_start"] == item["window_start"] and
                     (h["origin"] in item["source"] or
                      item["source"] in h["origin"])
                     for h in hooks)
+                item["verification"] = "tracked" if item["tracked"] else "needs_history_review"
+                item.pop("overdue", None)
             display = {}
             for line in novel.splitlines():
                 match = re.match(r"^- ([a-z][a-z0-9_]{1,49}) — (.+)$", line)
                 if match and match.group(1) in cast:
                     display[match.group(1)] = match.group(2)
+            first_seen = {}
+            for row in self._active(path):
+                for name in row.get("participants", []):
+                    first_seen.setdefault(name, row["turn"])
+            atomic(path / "system/meta.json", dump({
+                **meta, "director_version": meta["version"],
+                "director_hook_hash": digest(saved),
+            }))
+            overview = story_hooks.director_brief(hooks, meta["turn"])
+            for field in ("unresolved_hooks", "resolved_hooks"):
+                overview[field] = [
+                    {k: v for k, v in row.items() if k not in {"origin", "last_evidence"}}
+                    for row in overview[field]
+                    if field != "resolved_hooks" or row["window_end"] is not None
+                    or row["kind"] == "appearance"]
             return {
                 "session_id": sid, "version": meta["version"],
                 "turn": meta["turn"],
+                "state": json.loads(self._read(path, "state.md")),
+                "first_recorded_participation": first_seen,
                 "author_window_candidates": windows,
                 "untracked_author_windows": [w for w in windows if not w["tracked"]],
                 "cast": [
                     {"id": c, "display": display.get(c, c)} for c in sorted(cast)
                 ], "open_arcs": arcs,
-                **story_hooks.director_brief(hooks, meta["turn"]),
+                **overview,
                 "empty_ledger": not hooks,
                 "instructions": ("Use this BEFORE choosing participants. "
                                  "Check all author deadlines and ongoing NPC goals. "
@@ -765,27 +793,43 @@ class Engine:
             # pin new permanent memory to an unstable source.
             for item in additions:
                 need(isinstance(item, dict) and
-                     (last == 0 or item.get("origin_turn") != last),
+                     (not meta.get("last_undo") or last == 0 or
+                      (item.get("origin_turn") != last and item.get("last_turn") != last)),
                      "HOOK_BACKFILL_LAST_TURN",
                      "Backfill from earlier scenes or the author original; "
                      "the latest turn can still be rolled back")
             original = self._read(path, "original.txt")
             need(digest(original) == meta["original_hash"], "ORIGINAL_CORRUPTED",
                  "Original canon must be intact before backfill")
-            old = (self._read(path, "hooks.md")
-                   if (path / "hooks.md").exists() else story_hooks.HEADER)
+            old = self._hook_ledger(path, meta)
             updated = story_hooks.backfill(
                 old, additions, original,
                 {row["turn"]: row["narration"] for row in active},
                 last, self._cast(path))
             need(updated != old, "HOOK_BACKFILL_UNCHANGED", "No new hooks supplied")
             newer = {**meta, "version": meta["version"] + 1,
-                     "packet": None, "scene_review": None}
+                     "packet": None, "scene_review": None,
+                     "hook_file_hash": digest(updated)}
+            if meta.get("last_undo"):
+                undo = deepcopy(meta["last_undo"])
+                prior = undo["before"].get("hooks.md", old)
+                undo["before"]["hooks.md"] = story_hooks.backfill(
+                    prior, additions, original,
+                    {row["turn"]: row["narration"] for row in active
+                     if row["turn"] < last}, last - 1, self._cast(path))
+                newer["last_undo"] = undo
+            by_turn = {row["turn"]: row for row in active}
+            for h in story_hooks.parse(updated, self._cast(path)):
+                if h["kind"] == "appearance" and h["status"] == "closed":
+                    need(bool(h["participants"]) and set(h["participants"]) <= set(
+                        by_turn.get(h["last_turn"], {}).get("participants", [])),
+                        "HOOK_APPEARANCE_EVIDENCE",
+                        "Completed appearance requires actual archived participation")
             audit_log = self._read(path, "system/audit.jsonl")
             marker = dump({
                 "kind": "hook_backfill", "turn": last,
-                "added": [{"id": item["id"], "origin_turn": item["origin_turn"],
-                           "source": item["source"]} for item in additions],
+                "added": additions,
+                "ledger_sha256": digest(updated),
             }) + "\n"
             self._write(path, meta, {
                 "hooks.md": updated,
@@ -794,7 +838,8 @@ class Engine:
             return {"updated": True, "session_id": sid,
                     "version": newer["version"],
                     "added": len(additions),
-                    "unresolved": len(story_hooks.parse(updated))}
+                    "unresolved": sum(h["status"] != "closed"
+                                      for h in story_hooks.parse(updated))}
 
     def prepare(self, sid: str, reader_text: str = "",
                 participants: list[str] | None = None, kind: str = "turn",
@@ -822,8 +867,20 @@ class Engine:
                 need((kind == "audit") == bool(meta["audit_due"]), "AUDIT_GATE",
                      "Audit is required at turn 15/60 before another scene")
             cast = self._cast(path)
+            ledger = self._hook_ledger(path, meta)
             state = json.loads(self._read(path, "state.md"))
             if kind == "turn":
+                arcs = open_threads.parse(
+                    self._read(path, "open_threads.md")
+                    if (path / "open_threads.md").exists() else open_threads.HEADER)
+                authored = scene_preflight.is_formatted_builder(
+                    self._read(self.instructions, "skin_builder.md"))
+                if authored or arcs or story_hooks.parse(ledger, cast) or (
+                    story_hooks.author_window_candidates(
+                        self._read(path, "original.txt"), meta["turn"])):
+                    need(meta.get("director_version") == meta["version"] and
+                         meta.get("director_hook_hash") == digest(ledger),
+                         "DIRECTOR_REQUIRED", "Read director brief before preparing a new scene")
                 validate_state(state, cast, meta["turn"])
                 need(state["location"] != "НЕ ЗАДАНА", "OPENING_MISSING",
                      "Set opening scene before playing")
@@ -884,7 +941,8 @@ class Engine:
                      "Relationship file changed outside an authorized transaction")
             files["relationships.md"] = dump(normalized_rel)
             open_threads.parse(files["open_threads.md"])
-            story_hooks.parse(files["hooks.md"], cast)
+            files["hooks.md"] = ledger
+            story_hooks.parse(ledger, cast)
             if meta.get("novel_hash"):
                 need(digest(files["novel.md"]) == meta["novel_hash"],
                      "CANON_CHANGED", "Main questionnaire changed outside the engine")
@@ -910,12 +968,9 @@ class Engine:
                             "instructions_mode": "loaded_once_per_chat",
                             "files": files, "recent_scenes": recent,
                              "story_health": {
-                                 "overdue_hook_ids": [
-                                     x["id"] for x in plot_health["author_deadlines_overdue"]],
-                                 "active_author_window_ids": [
-                                     x["id"] for x in plot_health["author_windows_active"]],
-                                 "stale_hook_ids": [
-                                     x["id"] for x in plot_health["stale_hooks"]]}})
+                                 "overdue_hook_ids": plot_health["author_deadlines_overdue"],
+                                  "active_author_window_ids": plot_health["author_windows_active"],
+                                  "stale_hook_ids": plot_health["stale_hooks"]}})
             content_chunks = chunks(payload)
             offsets = []
             position = 0
@@ -1148,14 +1203,19 @@ class Engine:
             after_threads, thread_changes = open_threads.apply(
                 before_threads, data.get("thread_updates", []),
                 data["narration"], meta["turn"] + 1)
-            before_hooks = (self._read(path, "hooks.md")
-                            if (path / "hooks.md").exists() else story_hooks.HEADER)
+            before_hooks = self._hook_ledger(path, meta)
             after_hooks, hook_changes = story_hooks.apply(
                 before_hooks, data.get("hook_updates", []),
                 data["narration"], meta["turn"] + 1, cast)
             closed_arcs = {item["id"] for item in thread_changes
                            if item["status"] == "closed"}
-            remaining_hooks = story_hooks.parse(after_hooks, cast)
+            remaining_hooks = [h for h in story_hooks.parse(after_hooks, cast)
+                               if h["status"] != "closed"]
+            for h in hook_changes:
+                if h["status"] == "closed" and h["kind"] == "appearance":
+                    need(bool(h["participants"]) and set(h["participants"]) <= set(used),
+                         "HOOK_APPEARANCE_EVIDENCE",
+                         "Appearance closure requires actual scene participation")
             need(not any(h["arc_id"] in closed_arcs for h in remaining_hooks),
                  "ARC_HAS_OPEN_HOOKS",
                  "An arc cannot close while independent unresolved hooks "
@@ -1247,6 +1307,7 @@ class Engine:
             new = deepcopy(meta)
             new.update(version=meta["version"] + 1, turn=meta["turn"] + 1,
                        scene_review=None, relationship_file_hash=digest(after_rel),
+                        hook_file_hash=digest(after_hooks),
                        audit_due=due, packet=None,
                        last_undo={"request_id": req, "before": before,
                                   "prior_turn": meta["turn"],
@@ -1282,6 +1343,7 @@ class Engine:
                            files.get("relationships.md",
                                      self._read(path, "relationships.md"))),
                        audit_due=undo["prior_audit_due"],
+                        hook_file_hash=digest(files.get("hooks.md", self._hook_ledger(path, meta))),
                        last_undo=None, packet=None)
             new["requests"][request_id]["reverted"] = True
             self._write(path, meta, files, new,
@@ -1302,21 +1364,20 @@ class Engine:
             if meta["audit_due"] == 60:
                 required |= {"long_term"}
             story_cast = self._cast(path)
-            hook_ledger = (self._read(path, "hooks.md")
-                           if (path / "hooks.md").exists() else story_hooks.HEADER)
+            hook_ledger = self._hook_ledger(path, meta)
             hook_rows = story_hooks.parse(hook_ledger, story_cast)
             arc_rows = open_threads.parse(
                 self._read(path, "open_threads.md")
                 if (path / "open_threads.md").exists() else open_threads.HEADER)
             # A populated durable ledger requires a thorough plot audit.
             # Old sessions with only the one-line arc index remain compatible.
-            if hook_rows:
+            if hook_rows or arc_rows:
                 required.add("story")
             need(isinstance(report, dict) and set(report) == required and all(
                  isinstance(report[k], str) and bool(report[k].strip())
                  for k in required - {"story"}),
                  "AUDIT_REPORT", "Audit must check required domains")
-            if hook_rows:
+            if hook_rows or arc_rows:
                 expected = ({"hook:" + h["id"] for h in hook_rows} |
                             {"arc:" + a["id"] for a in arc_rows})
                 actual = report["story"]
@@ -1479,9 +1540,9 @@ class Engine:
             return {"audited": True, "turn": meta["turn"],
                     "version": new["version"], "corrections": len(trail),
                     "plot_findings": {
-                        "overdue": [h["id"] for h in findings["author_deadlines_overdue"]],
-                        "stale": [h["id"] for h in findings["stale_hooks"]],
-                        "open_hook_count": len(hook_rows),
+                        "overdue": findings["author_deadlines_overdue"],
+                        "stale": findings["stale_hooks"],
+                        "open_hook_count": sum(h["status"] != "closed" for h in hook_rows),
                         "open_arc_count": len(arc_rows)}}
 
     def history(self, sid: str, start: int = 1, end: int | None = None,
