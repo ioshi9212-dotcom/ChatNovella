@@ -113,7 +113,7 @@ _SENDER_TIME = re.compile(
 _SMS_TEXT = re.compile(
     r"^\s*(?:СМС|SMS|сообщение)\s+от\s+\S+.*?[:—]\s*\S+", re.IGNORECASE
 )
-_CHAT_VISUAL = re.compile(r"^\s*(?:>|[│┃║╭┌└╰💬📱📩✉️])")
+_CHAT_VISUAL = re.compile(r"^\s*(?:>|[│┃║╭┌└╰])")
 
 
 def messenger_layout_errors(skin: str, narration: str) -> list[str]:
@@ -126,13 +126,13 @@ def messenger_layout_errors(skin: str, narration: str) -> list[str]:
         return []
     result = []
     main = narration.split(_CHOICE[0], 1)[0]
-    for idx, line in enumerate(main.splitlines()):
+    lines = main.splitlines()
+    for idx, line in enumerate(lines):
         value = line.strip()
         if not value:
             continue
         if not (_SENDER_TIME.match(value) or _SMS_TEXT.match(value)):
             continue
-        lines = main.splitlines()
         # The frame may begin on the preceding line or be an explicit
         # message bubble/quote on the sender line itself.
         visual = any(_CHAT_VISUAL.match(lines[i]) for i in (
