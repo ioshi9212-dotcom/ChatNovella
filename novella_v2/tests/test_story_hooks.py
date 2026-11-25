@@ -385,6 +385,134 @@ class TestStoryHooks(unittest.TestCase):
         result = self.engine.audit(sid, p["version"], p["packet_id"], p["chunk_hashes"], report)
         self.assertTrue(result["audited"])
 
+    def test_story_plan_required_and_bound_to_packet(self):
+        sid = self.make()
+        brief = self.engine.director_brief(sid)
+        with self.assertRaisesRegex(story_hooks.HookProblem, "STORY_PLAN_REQUIRED"):
+            self.engine.prepare(sid, "1", ["adrian"], request_id="hook-turn-1")
+        plan = fixture_plan(brief)
+        plan["focus_ids"] = ["hook:missing"]
+        with self.assertRaisesRegex(story_hooks.HookProblem, "known IDs"):
+            self.engine.prepare(sid, "1", ["adrian"], request_id="hook-turn-1",
+                                story_plan=plan)
+        plan["focus_ids"] = ["hook:nathan_client"]
+        p = self.engine.prepare(sid, "1", ["adrian"], request_id="hook-turn-1",
+                                story_plan=plan)
+        replay = self.engine.prepare(sid, "1", ["adrian"], request_id="hook-turn-1")
+        self.assertEqual(p["packet_id"], replay["packet_id"])
+        packet = json.loads((self.engine.root / sid / "system/packet.json").read_text())
+        self.assertEqual(packet["story_plan"], plan)
+        self.assertEqual(packet["story_health"]["overdue_hook_ids"], [])
+
+    def test_closed_result_stays_in_next_writing_context(self):
+        sid = self.make()
+        quote = "Натан назвал заказчика: им оказался Марк."
+        self.turn(sid, 1, quote, [
+            hook("nathan_client", "Неизвестный заказчик Натана", "mystery",
+                 quote, status="closed", detail="Заказчиком назван Марк",
+                 participants=["adrian"])
+        ])
+        self.packet(sid, 2)
+        packet = json.loads((self.engine.root / sid / "system/packet.json").read_text())
+        self.assertEqual(packet["resolved_outcomes"][0]["detail"], "Заказчиком назван Марк")
+        self.assertNotIn("nathan_client", packet["files"]["hooks.md"])
+        self.assertIn("seline_arrival", packet["files"]["hooks.md"])
+
+    def test_orphan_hook_rejected_and_historical_arc_repair_survives_rollback(self):
+        sid = self.make(initial=False)
+        self.turn(sid, 1, HISTORY_QUOTE)
+        self.turn(sid, 2)
+        version = self.engine.status(sid)["version"]
+        addition = {**hook("julian_watch", "Обещание Джулиана", "commitment",
+                            HISTORY_QUOTE, arc_id="julian_arc"),
+                    "origin_turn": 1}
+        with self.assertRaisesRegex(story_hooks.HookProblem, "existing open arc"):
+            self.engine.backfill_hooks(sid, version, [addition])
+        result = self.engine.backfill_hooks(sid, version, [addition], [{
+            "id": "julian_arc", "title": "Наблюдение Джулиана",
+            "status": "active", "note": "Джулиан обещал наблюдать",
+            "source": HISTORY_QUOTE, "origin_turn": 1
+        }])
+        self.engine.rollback(sid, result["version"], "hook-turn-2", "Отмена")
+        brief = self.engine.director_brief(sid)
+        self.assertIn("julian_arc", {a["id"] for a in brief["open_arcs"]})
+        self.assertIn("julian_watch", {h["id"] for h in brief["unresolved_hooks"]})
+
+    def test_commit_rejects_orphan_hook(self):
+        sid = self.make()
+        with self.assertRaisesRegex(story_hooks.HookProblem, "existing open arc"):
+            self.turn(sid, 1, HISTORY_QUOTE, [
+                hook("julian_watch", "Обещание Джулиана", "commitment",
+                     HISTORY_QUOTE, arc_id="absent_arc")
+            ])
+        self.assertEqual(self.engine.status(sid)["turn"], 0)
+
+    def test_recorded_arrival_assessment_and_cache_survive_restart_and_rollback(self):
+        sid = self.make()
+        brief = self.engine.director_brief(sid)
+        packet = self.engine.prepare(sid, "Приходит Селин", ["adrian", "seline"],
+                                     request_id="seline-first", story_plan=fixture_plan(brief))
+        for i in packet["unread_chunk_indices"]:
+            self.engine.read_chunk(sid, packet["packet_id"], i)
+        next_state = state(1)
+        next_state["present"]["seline"] = empty_actor()
+        result = self.engine.commit(sid, {
+            "request_id": "seline-first", "expected_version": packet["version"],
+            "packet_id": packet["packet_id"], "chunk_hashes": packet["chunk_hashes"],
+            "reader_text": "Приходит Селин", "narration": "Селин вошла в комнату.",
+            "participants": ["adrian", "seline"], "state": next_state,
+            "knowledge": [], "events": [], "relations": [],
+        })
+        restarted = Engine(self.engine.root, self.engine.instructions)
+        brief = restarted.director_brief(sid)
+        self.assertEqual(brief["first_recorded_participation"]["seline"], 1)
+        self.assertEqual(brief["appearance_review"], ["seline_arrival"])
+        self.assertIn("hook:seline_arrival", brief["plan_priority_ids"])
+        with self.assertRaisesRegex(story_hooks.HookProblem, "flagged obligation"):
+            bad = fixture_plan(brief)
+            bad["priority"] = {}
+            restarted.prepare(sid, "Дальше", [], request_id="next", story_plan=bad)
+        restarted.prepare(sid, "Дальше", [], request_id="next", story_plan=fixture_plan(brief))
+        context = json.loads((self.engine.root / sid / "system/packet.json").read_text())
+        self.assertEqual(context["story_health"]["appearance_review_ids"], ["seline_arrival"])
+        restarted.rollback(sid, result["version"], "seline-first", "Отмена появления")
+        self.assertNotIn("seline", restarted.director_brief(sid)["first_recorded_participation"])
+
+    def test_structured_conditions_become_due_without_forcing_scene(self):
+        quote = "Фотографии Ханы запланированы на 10 мая."
+        original = CANON + quote
+        rows = story_hooks.parse(story_hooks.seed([
+            hook("hana_photo", "Фотографии", "commitment", quote,
+                 status="blocked", trigger="date:2026-05-10"),
+            hook("later_turn", "Следующий урок", "commitment", quote,
+                 status="blocked", trigger="turn:60"),
+            hook("after_photo", "Последствия", "consequence", quote,
+                 status="blocked", trigger="hook:hana_photo"),
+        ], original, {"seline"}))
+        overview = story_hooks.director_brief(rows, 58, world_datetime="2026-05-05T19:00:00")
+        self.assertEqual(overview["conditions_due"], [])
+        overview = story_hooks.director_brief(rows, 59, world_datetime="2026-05-10T00:00:00")
+        self.assertEqual(set(overview["conditions_due"]), {"hana_photo", "later_turn"})
+        self.assertEqual(next(h for h in rows if h["id"] == "hana_photo")["status"], "blocked")
+        rows[0 if rows[0]["id"] == "hana_photo" else next(
+            i for i, h in enumerate(rows) if h["id"] == "hana_photo")]["status"] = "closed"
+        overview = story_hooks.director_brief(rows, 60, world_datetime="2026-05-11T00:00:00")
+        self.assertIn("after_photo", overview["conditions_due"])
+
+    def test_audit_rotates_old_closures_without_dropping_current_hooks(self):
+        rows = [{"id": f"old_{i:04d}", "arc_id": "archived", "status": "closed",
+                 "kind": "mystery", "window_end": None, "last_turn": 1}
+                for i in range(1500)]
+        rows.append({"id": "live_hook", "arc_id": "live_arc", "status": "active",
+                     "kind": "mystery", "window_end": None, "last_turn": 1000})
+        chosen, cursor = story_hooks.audit_selection(rows, [{"id": "live_arc"}], 2000, 15)
+        self.assertEqual([h["id"] for h in chosen], ["live_hook"])
+        first, cursor = story_hooks.audit_selection(rows, [{"id": "live_arc"}], 2000, 60, cursor)
+        second, cursor = story_hooks.audit_selection(rows, [{"id": "live_arc"}], 2060, 60, cursor)
+        self.assertEqual(len(first), 65)
+        self.assertEqual(len(second), 65)
+        self.assertEqual({h["id"] for h in first} & {h["id"] for h in second}, {"live_hook"})
+
     def test_audit_requires_every_hook_and_arc_and_checks_provenance(self):
         sid = self.make()
         for number in range(1, 16):
