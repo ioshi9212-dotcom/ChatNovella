@@ -108,6 +108,9 @@ class TestStoryHooks(unittest.TestCase):
                          {"nathan_client", "seline_arrival"})
         self.assertIn({"id": "seline", "display": "Селин"}, brief["cast"])
         self.assertEqual(len(brief["open_arcs"]), 1)
+        self.assertEqual(len(brief["author_window_candidates"]), 1)
+        self.assertEqual(brief["author_window_candidates"][0]["window_end"], 120)
+        self.assertTrue(brief["author_window_candidates"][0]["tracked"])
         self.assertEqual(brief["author_deadlines_overdue"], [])
         self.assertEqual(
             next(x for x in brief["unresolved_hooks"]
@@ -137,6 +140,7 @@ class TestStoryHooks(unittest.TestCase):
         ledger = self.engine.root / sid / "hooks.md"
         ledger.unlink()
         self.assertTrue(self.engine.director_brief(sid)["empty_ledger"])
+        self.assertEqual(len(self.engine.director_brief(sid)["untracked_author_windows"]), 1)
         p = self.packet(sid, 1)
         packet = json.loads((self.engine.root / sid / "system/packet.json").read_text())
         self.assertEqual(packet["files"]["hooks.md"], story_hooks.HEADER)
@@ -199,6 +203,9 @@ class TestStoryHooks(unittest.TestCase):
         self.assertEqual(overview["author_deadlines_overdue"][0]["id"],
                          "seline_arrival")
         self.assertEqual(overview["unresolved_hooks"][0]["last_turn"], 0)
+        hints = story_hooks.author_window_candidates(CANON, 153)
+        self.assertEqual(hints[0]["window_start"], 90)
+        self.assertTrue(hints[0]["overdue"])
 
     def test_audit_requires_every_hook_and_arc_and_checks_provenance(self):
         sid = self.make()
