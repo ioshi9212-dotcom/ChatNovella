@@ -324,6 +324,57 @@ class TestStoryHooks(unittest.TestCase):
         self.assertEqual(rows["nathan_client"]["status"], "active")
         self.assertEqual(rows["nathan_client"]["origin"], CLIENT)
 
+    def test_historical_closure_reconciles_open_appearance_without_losing_identity(self):
+        row = story_hooks.seed([
+            hook("seline_arrival", "Селин", "appearance", APPEARANCE,
+                 participants=["seline"], window_start=90, window_end=120)
+        ], CANON, {"seline"})
+        quote = "Селин вошла и представилась."
+        closed = story_hooks.backfill(row, [{
+            **hook("seline_arrival", "Селин", "appearance", APPEARANCE,
+                   participants=["seline"], window_start=90, window_end=120,
+                   status="closed", detail="Селин появилась на сотом ходу"),
+            "origin_turn": 0, "last_turn": 100, "last_evidence": quote,
+            "reconcile": True
+        }], CANON, {100: quote}, 153, {"seline"})
+        item = story_hooks.parse(closed)[0]
+        self.assertEqual(item["last_turn"], 100)
+        self.assertEqual(item["origin"], APPEARANCE)
+        self.assertEqual(story_hooks.director_brief([item], 153)["resolved_hooks"][0]
+                         ["deadline_state"], "fulfilled")
+
+    def test_future_and_blocked_hooks_are_not_stale(self):
+        original = CANON + "Фотографии Ханы будут сделаны 10 мая.\n"
+        ledger = story_hooks.seed([
+            hook("hana_photo", "Фотографии Ханы", "commitment",
+                 "Фотографии Ханы будут сделаны 10 мая.", status="blocked",
+                 trigger="10 мая"),
+            hook("seline_arrival", "Селин", "appearance", APPEARANCE,
+                 participants=["seline"], window_start=90, window_end=120),
+        ], original, {"seline"})
+        brief = story_hooks.director_brief(story_hooks.parse(ledger), 50)
+        self.assertEqual(brief["stale_hooks"], [])
+        self.assertEqual(next(h for h in brief["unresolved_hooks"]
+                              if h["id"] == "hana_photo")["deadline_state"],
+                         "awaiting_condition")
+
+    def test_untracked_canon_requires_own_audit_report(self):
+        sid = self.make(initial=False)
+        for n in range(1, 16):
+            self.turn(sid, n)
+        p = self.engine.prepare(sid, "", [], "audit", "plot-window-audit")
+        for i in p["unread_chunk_indices"]:
+            self.engine.read_chunk(sid, p["packet_id"], i)
+        report = {key: "Сверено" for key in
+                  ("continuity", "state", "knowledge", "timeline", "relationships")}
+        report["story"] = {"arc:rabbits": "Арка остаётся активной, не закрыта."}
+        with self.assertRaisesRegex(EngineError, "Plot audit must address"):
+            self.engine.audit(sid, p["version"], p["packet_id"], p["chunk_hashes"], report)
+        for w in story_hooks.author_window_candidates(CANON, 15):
+            report["story"][w["id"]] = "Срок Селин ещё не наступил, он проверен по канону."
+        result = self.engine.audit(sid, p["version"], p["packet_id"], p["chunk_hashes"], report)
+        self.assertTrue(result["audited"])
+
     def test_audit_requires_every_hook_and_arc_and_checks_provenance(self):
         sid = self.make()
         for number in range(1, 16):
@@ -340,6 +391,8 @@ class TestStoryHooks(unittest.TestCase):
             "hook:nathan_client": "Натан остаётся действующим неизвестным заказчиком.",
             "hook:seline_arrival": "Появление Селин ожидается в авторском диапазоне.",
             "arc:rabbits": "Арка криминальной линии активна, не закрыта.",
+            **{w["id"]: "Срок автора проверен по анкете и истории."
+               for w in story_hooks.author_window_candidates(CANON, 15)},
         }
         result = self.engine.audit(sid, p["version"], p["packet_id"],
                                    p["chunk_hashes"], report)
