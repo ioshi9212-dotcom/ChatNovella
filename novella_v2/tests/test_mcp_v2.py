@@ -314,8 +314,9 @@ class TestV2MCP(unittest.TestCase):
         self.read(sid, packet)
         finished = self.tool("finish_v2_audit", session_id=sid, expected_version=packet["version"],
                              packet_id=packet["packet_id"], chunk_hashes=packet["chunk_hashes"],
-                             report={key: "Сверено по полным сценам" for key in (
+                             report={**{key: "Сверено по полным сценам" for key in (
                                  "continuity", "state", "knowledge", "timeline", "relationships")},
+                                 "story": {"arc:missing_key": "Тайна ключа остаётся открытой."}},
                              corrections={})
         self.assertTrue(finished["audited"])
         self.assertEqual(self.tool("get_v2_status", session_id=sid)["audit_due"], 0)
