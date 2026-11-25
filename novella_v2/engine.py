@@ -23,6 +23,7 @@ from typing import Any
 
 from . import relations as relationship_store
 from . import threads as open_threads
+from . import hooks as story_hooks
 from . import scene_preflight
 
 CHUNK_SIZE = 36_000  # Unicode code points, not UTF-8 bytes
@@ -466,7 +467,8 @@ class Engine:
     def create(self, original: str, blocks: list[dict], names: dict[str, str],
                genre_answers: dict[str, str] | None = None,
                relationships: dict | None = None,
-               initial_threads: list[dict] | None = None) -> dict:
+               initial_threads: list[dict] | None = None,
+               initial_hooks: list[dict] | None = None) -> dict:
         need(isinstance(original, str) and bool(original.strip()), "ORIGINAL_REQUIRED",
              "Complete original author's text is required")
         need(isinstance(names, dict) and all(isinstance(v, str) and v.strip()
@@ -518,6 +520,8 @@ class Engine:
         candidate_relations = validate_relations(
             relationships or {"npc_to_pov": {}, "npc_to_npc": {}}, set(names) - {"pov"})
         initial_open_threads = open_threads.seed(initial_threads, original)
+        initial_hook_ledger = story_hooks.seed(initial_hooks, original,
+                                              set(names) - {"pov"})
         sid = "NV2_" + secrets.token_hex(12)
         tmp = Path(tempfile.mkdtemp(prefix=".new-", dir=self.root))
         try:
@@ -526,6 +530,7 @@ class Engine:
                      "state.md": dump(empty_state()),
                      "timeline.md": "# Хронология\n",
                      "open_threads.md": initial_open_threads,
+                     "hooks.md": initial_hook_ledger,
                      "history.jsonl": "", "system/audit.jsonl": ""}
             for name in set(names) | ({"pov"} if partitions["pov"] else set()):
                 files["characters/" + name + ".md"] = CHARACTER_RULE + "".join(partitions[name])
@@ -657,6 +662,8 @@ class Engine:
         names = ["novel.md", "state.md", "relationships.md", "timeline.md"]
         if (path / "open_threads.md").exists():
             names.append("open_threads.md")
+        if (path / "hooks.md").exists():
+            names.append("hooks.md")
         if kind == "canon":
             names.append("original.txt")
         for name in sorted(relevant):
@@ -749,7 +756,9 @@ class Engine:
                          "novel.md": self._read(path, "novel.md"),
                          "relationships.md": self._read(path, "relationships.md"),
                          "open_threads.md": (self._read(path, "open_threads.md")
-                             if (path / "open_threads.md").exists() else open_threads.HEADER)}
+                             if (path / "open_threads.md").exists() else open_threads.HEADER),
+                          "hooks.md": (self._read(path, "hooks.md")
+                              if (path / "hooks.md").exists() else story_hooks.HEADER)}
                 need(digest(files["original.txt"]) == meta["original_hash"],
                      "ORIGINAL_CORRUPTED", "Author's original source no longer matches")
             else:
@@ -758,7 +767,9 @@ class Engine:
                          "relationships.md": self._read(path, "relationships.md"),
                          "timeline.md": self._read(path, "timeline.md"),
                          "open_threads.md": (self._read(path, "open_threads.md")
-                             if (path / "open_threads.md").exists() else open_threads.HEADER)}
+                             if (path / "open_threads.md").exists() else open_threads.HEADER),
+                          "hooks.md": (self._read(path, "hooks.md")
+                              if (path / "hooks.md").exists() else story_hooks.HEADER)}
             # Normalize legacy two-section relationships for a safe transition.
             # New files always include a short rule and directed familiarity.
             normalized_rel = validate_relations(
@@ -775,6 +786,7 @@ class Engine:
                      "Relationship file changed outside an authorized transaction")
             files["relationships.md"] = dump(normalized_rel)
             open_threads.parse(files["open_threads.md"])
+            story_hooks.parse(files["hooks.md"], cast)
             if meta.get("novel_hash"):
                 need(digest(files["novel.md"]) == meta["novel_hash"],
                      "CANON_CHANGED", "Main questionnaire changed outside the engine")
@@ -796,7 +808,9 @@ class Engine:
             payload = dump({"kind": kind, "reader_text": reader_text,
                             "audit_due": meta["audit_due"], "participants": sorted(relevant),
                             "instructions_mode": "loaded_once_per_chat",
-                            "files": files, "recent_scenes": recent})
+                            "files": files, "recent_scenes": recent,
+                             "story_brief": story_hooks.director_brief(
+                                 story_hooks.parse(files["hooks.md"], cast), meta["turn"])})
             content_chunks = chunks(payload)
             offsets = []
             position = 0
