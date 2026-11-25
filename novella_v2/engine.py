@@ -714,6 +714,16 @@ class Engine:
                 self._read(path, "open_threads.md")
                 if (path / "open_threads.md").exists() else open_threads.HEADER)
             novel = self._read(path, "novel.md")
+            original = self._read(path, "original.txt")
+            need(digest(original) == meta["original_hash"], "ORIGINAL_CORRUPTED",
+                 "Author original must remain intact for plot planning")
+            windows = story_hooks.author_window_candidates(original, meta["turn"])
+            for item in windows:
+                item["tracked"] = any(
+                    h["window_end"] == item["window_end"] and
+                    (h["origin"] in item["source"] or
+                     item["source"] in h["origin"])
+                    for h in hooks)
             display = {}
             for line in novel.splitlines():
                 match = re.match(r"^- ([a-z][a-z0-9_]{1,49}) — (.+)$", line)
@@ -721,7 +731,10 @@ class Engine:
                     display[match.group(1)] = match.group(2)
             return {
                 "session_id": sid, "version": meta["version"],
-                "turn": meta["turn"], "cast": [
+                "turn": meta["turn"],
+                "author_window_candidates": windows,
+                "untracked_author_windows": [w for w in windows if not w["tracked"]],
+                "cast": [
                     {"id": c, "display": display.get(c, c)} for c in sorted(cast)
                 ], "open_arcs": arcs,
                 **story_hooks.director_brief(hooks, meta["turn"]),
