@@ -113,9 +113,10 @@ def rule_report_errors(skin: str, narration: str, report: list[dict]) -> list[st
 # Strong high-confidence signs of a message being presented to the reader as
 # sender + timestamp + text, rather than a character merely using a phone.
 _SENDER_TIME = re.compile(
-    r"(?<!\w)(?:\*\*)?[А-ЯЁA-Z][\wА-ЯЁа-яё .-]{0,39}(?:\*\*)?"
+    r"(?<!\w)(?:\*\*)?[А-ЯЁA-Z][а-яёa-z]{1,24}"
+    r"(?:\s+[А-ЯЁA-Z][а-яёa-z]{1,24})?(?:\*\*)?"
     r"\s*(?:[,·—-]\s*)?[\[(]?(?:[01]?\d|2[0-3]):[0-5]\d[\])]?"
-    r"\s*[:—-]?\s*\S+"
+    r"\s*(?:[:—-]\s*\S+|$)"
 )
 _SMS_TEXT = re.compile(
     r"^\s*(?:СМС|SMS|сообщение)\s+от\s+\S+.*?[:—]\s*\S+", re.IGNORECASE
