@@ -135,6 +135,7 @@ def build_mcp(engine: Callable[[], Engine]) -> FastMCP:
         Does not rewrite scenes, canon, relationships or open_threads.
         Supply origin_turn and optional last_turn/last_evidence separately.
         Reopen an incorrectly closed hook with reopen=true and the same identity.
+        Reconcile an existing open hook with historical closure using reconcile=true.
         The latest turn cannot be used while rollback is possible.
         """
         return await call("backfill_hooks", session_id, expected_version,
