@@ -7,7 +7,7 @@ from tempfile import TemporaryDirectory
 import unittest
 
 from novella_v2.engine import Engine, EngineError, dump, atomic, empty_actor
-from novella_v2.relations import normalize, update, RelationProblem, rule, MAX_SCALES
+from novella_v2.relations import normalize, update, RelationProblem, rule
 
 
 def physical(n, remote=False):
@@ -206,12 +206,12 @@ class TestRelationships(unittest.TestCase):
         with self.assertRaisesRegex(EngineError, "Unchanged metric"):
             self.submit(2, [self.metric("любовь", 54)])
 
-    def test_max_ten_individual_scales_not_ten_generic_fixed_labels(self):
-        scales = [self.metric("авторская_шкала_" + str(n), n + 10) for n in range(MAX_SCALES)]
+    def test_all_canon_scales_can_be_stored_and_new_ones_added(self):
+        scales = [self.metric("авторская_шкала_" + str(n), n + 10) for n in range(12)]
         self.submit(1, [self.meet()] + scales)
-        self.assertEqual(len(self.relation()["npc_to_pov"]["adrian"]), 10)
-        with self.assertRaisesRegex(EngineError, "exceed 10"):
-            self.submit(2, [self.metric("одиннадцатая", 45)])
+        self.assertEqual(len(self.relation()["npc_to_pov"]["adrian"]), 12)
+        self.submit(2, [self.metric("новое_устойчивое_чувство", 45)])
+        self.assertEqual(len(self.relation()["npc_to_pov"]["adrian"]), 13)
 
     def test_link_description_rejects_runaway_memo(self):
         changes = [self.meet("adrian", "silas"),
