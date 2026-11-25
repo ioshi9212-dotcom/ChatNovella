@@ -106,6 +106,13 @@ def read_chunk(sid: str, packet_id: str, index: int):
     return store.read_chunk(sid, packet_id, index)
 
 
+@app.post("/v2/novels/{sid}/review")
+def review(sid: str, body: dict):
+    return store.review_scene(
+        sid, body["expected_version"], body["packet_id"], body["request_id"],
+        body["skin_sha256"], body["narration"], body["checks"])
+
+
 @app.post("/v2/novels/{sid}/turns")
 def commit(sid: str, body: dict):
     return store.commit(sid, body)
