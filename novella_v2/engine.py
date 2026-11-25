@@ -894,12 +894,19 @@ class Engine:
             if kind != "canon":
                 files["knowledge/pov.md"] = self._read(path, "knowledge/pov.md")
             recent = [] if kind == "canon" else _recent_turns(path, 15 if kind == "audit" else 3)
+            plot_health = story_hooks.director_brief(
+                story_hooks.parse(files["hooks.md"], cast), meta["turn"])
             payload = dump({"kind": kind, "reader_text": reader_text,
                             "audit_due": meta["audit_due"], "participants": sorted(relevant),
                             "instructions_mode": "loaded_once_per_chat",
                             "files": files, "recent_scenes": recent,
-                             "story_brief": story_hooks.director_brief(
-                                 story_hooks.parse(files["hooks.md"], cast), meta["turn"])})
+                             "story_health": {
+                                 "overdue_hook_ids": [
+                                     x["id"] for x in plot_health["author_deadlines_overdue"]],
+                                 "active_author_window_ids": [
+                                     x["id"] for x in plot_health["author_windows_active"]],
+                                 "stale_hook_ids": [
+                                     x["id"] for x in plot_health["stale_hooks"]]}})
             content_chunks = chunks(payload)
             offsets = []
             position = 0
