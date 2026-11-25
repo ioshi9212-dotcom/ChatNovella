@@ -761,7 +761,9 @@ class Engine:
                 "state": json.loads(self._read(path, "state.md")),
                 "first_recorded_participation": first_seen,
                 "author_window_candidates": windows,
-                "untracked_author_windows": [w for w in windows if not w["tracked"]],
+                "untracked_author_windows": [{"source_line": w["source_line"],
+                                              "window_end": w["window_end"]}
+                                             for w in windows if not w["tracked"]],
                 "cast": [
                     {"id": c, "display": display.get(c, c)} for c in sorted(cast)
                 ], "open_arcs": arcs,
@@ -873,9 +875,7 @@ class Engine:
                 arcs = open_threads.parse(
                     self._read(path, "open_threads.md")
                     if (path / "open_threads.md").exists() else open_threads.HEADER)
-                authored = scene_preflight.is_formatted_builder(
-                    self._read(self.instructions, "skin_builder.md"))
-                if authored or arcs or story_hooks.parse(ledger, cast) or (
+                if arcs or story_hooks.parse(ledger, cast) or (
                     story_hooks.author_window_candidates(
                         self._read(path, "original.txt"), meta["turn"])):
                     need(meta.get("director_version") == meta["version"] and
@@ -963,6 +963,13 @@ class Engine:
             recent = [] if kind == "canon" else _recent_turns(path, 15 if kind == "audit" else 3)
             plot_health = story_hooks.director_brief(
                 story_hooks.parse(files["hooks.md"], cast), meta["turn"])
+            if kind == "turn":
+                # Closed non-author mysteries stay in persistent memory and audit,
+                # not in every writing packet.
+                files["hooks.md"] = story_hooks.render([
+                    h for h in story_hooks.parse(ledger, cast)
+                    if h["status"] != "closed" or h["window_end"] is not None
+                    or h["kind"] == "appearance"], cast)
             payload = dump({"kind": kind, "reader_text": reader_text,
                             "audit_due": meta["audit_due"], "participants": sorted(relevant),
                             "instructions_mode": "loaded_once_per_chat",
