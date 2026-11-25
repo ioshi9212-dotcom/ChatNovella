@@ -23,6 +23,7 @@ from typing import Any
 
 from . import relations as relationship_store
 from . import threads as open_threads
+from . import scene_preflight
 
 CHUNK_SIZE = 36_000  # Unicode code points, not UTF-8 bytes
 SESSION = re.compile(r"^NV2_[0-9a-f]{24}$")
@@ -861,6 +862,45 @@ class Engine:
         except relationship_store.RelationProblem as exc:
             raise EngineError("RELATION_INVALID", str(exc), 422) from exc
 
+    def review_scene(self, sid: str, expected_version: int, packet_id: str,
+                     request_id: str, skin_sha256: str, narration: str,
+                     checks: list[dict]) -> dict:
+        """Check the FULL current builder before committing a scene.
+
+        This does NOT generate or repair prose. The model supplies a per-section
+        literary audit; the server checks its coverage, objective layout and
+        binding to the exact narration/packet/builder. Failed reviews save
+        nothing. A successful receipt is required by commit for authored format.
+        """
+        with self._locked(sid) as (path, meta):
+            self._version(meta, expected_version)
+            packet = meta.get("packet")
+            need(packet is not None and packet.get("id") == packet_id,
+                 "PACKET_EXPIRED", "Review only the current prepared packet")
+            self._receipt(meta, packet_id, packet["hashes"], "turn")
+            need(packet.get("request_id") in (None, request_id),
+                 "REQUEST_ID_MISMATCH", "Review request must match prepared request")
+            need(isinstance(narration, str) and 0 < len(narration) <= 120_000,
+                 "SCENE_TEXT", "Review requires the complete scene")
+            skin = self._read(self.instructions, "skin_builder.md")
+            actual_sha = digest(skin)
+            need(skin_sha256 == actual_sha, "SKIN_VERSION_CHANGED",
+                 "Refresh the active Skin Builder; never validate with an older edition")
+            sections = scene_preflight.review_sections(skin)
+            problems = (scene_preflight.layout_errors(skin, narration, meta["turn"] + 1)
+                        + scene_preflight.report_errors(skin, checks))
+            if problems:
+                if meta.get("scene_review") is not None:
+                    atomic(path / "system/meta.json", dump({**meta, "scene_review": None}))
+                return {"approved": False, "issues": problems,
+                        "required_sections": sections, "skin_sha256": actual_sha}
+            receipt = {"request_id": request_id, "packet_id": packet_id,
+                       "narration_sha256": digest(narration),
+                       "skin_sha256": actual_sha, "version": meta["version"]}
+            atomic(path / "system/meta.json", dump({**meta, "scene_review": receipt}))
+            return {"approved": True, "issues": [], "required_sections": sections,
+                    "skin_sha256": actual_sha, "narration_sha256": digest(narration)}
+
     def commit(self, sid: str, data: dict) -> dict:
         required = {"request_id", "expected_version", "packet_id", "chunk_hashes",
                     "reader_text", "narration", "participants", "state",
@@ -905,6 +945,20 @@ class Engine:
                  "SOURCE_CHANGED", "A file changed after preparing the context")
             need(packet["reader_text"] == data["reader_text"],
                  "INPUT_MISMATCH", "Prepared and committed reader text differ")
+            # Full authored Skin Builder review is a mandatory pre-save gate.
+            # Synthetic fixtures without an authored format remain compatible.
+            skin = self._read(self.instructions, "skin_builder.md")
+            if scene_preflight.is_formatted_builder(skin):
+                receipt = meta.get("scene_review") or {}
+                need(receipt.get("request_id") == req
+                     and receipt.get("packet_id") == data["packet_id"]
+                     and receipt.get("version") == meta["version"]
+                     and receipt.get("narration_sha256") == digest(data["narration"])
+                     and receipt.get("skin_sha256") == digest(skin),
+                     "SCENE_REVIEW_REQUIRED",
+                     "Review the exact final scene against every current Skin Builder "
+                     "section before saving")
+
             cast = self._cast(path)
             used = data["participants"]
             need(isinstance(used, list) and len(used) == len(set(used)) and
@@ -1045,7 +1099,7 @@ class Engine:
                   15 if (meta["turn"] + 1) % 15 == 0 else 0
             new = deepcopy(meta)
             new.update(version=meta["version"] + 1, turn=meta["turn"] + 1,
-                       relationship_file_hash=digest(after_rel),
+                       scene_review=None, relationship_file_hash=digest(after_rel),
                        audit_due=due, packet=None,
                        last_undo={"request_id": req, "before": before,
                                   "prior_turn": meta["turn"],

@@ -97,6 +97,12 @@ class SceneAccess(Model):
     source: str
 
 
+class ReviewCheck(Model):
+    section: str
+    result: Literal["pass", "not_applicable", "fail"]
+    note: Annotated[str, Field(min_length=12, max_length=1200)]
+
+
 class Turn(Model):
     request_id: RequestId
     expected_version: Version

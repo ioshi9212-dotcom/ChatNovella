@@ -19,7 +19,7 @@ from starlette.concurrency import run_in_threadpool
 from .engine import Engine, EngineError
 from .mcp_models import (
     AnchorBlock, AuditReport, Checksum, Correction, RangeBlock, Relationships,
-    RequestId, SessionId, State, ThreadUpdate, Turn, Version,
+    RequestId, ReviewCheck, SessionId, State, ThreadUpdate, Turn, Version,
 )
 
 
@@ -125,6 +125,22 @@ def build_mcp(engine: Callable[[], Engine]) -> FastMCP:
     async def read_v2_chunk(session_id: SessionId, packet_id: str, index: int) -> dict[str, Any]:
         """Read one UNREAD zero-based chunk and receipt. Verify its SHA-256 and joined packet hash; require all_chunks_read before commit."""
         return await call("read_chunk", session_id, packet_id, index)
+
+    @server.tool(annotations=repeat)
+    async def review_v2_scene(
+        session_id: SessionId, expected_version: Version,
+        packet_id: str, request_id: RequestId, skin_sha256: Checksum,
+        narration: str, checks: list[ReviewCheck],
+    ) -> dict[str, Any]:
+        """MANDATORY before saving an authored V2 scene. Audit EVERY section
+        of the current full Skin Builder, including all individual rules.
+        Fix any failed sections and rerun review on the exact final narration.
+        Server checks mandatory formatting and binds approval to the final text.
+        Never show an unapproved draft to the reader.
+        """
+        return await call("review_scene", session_id, expected_version,
+                          packet_id, request_id, skin_sha256, narration,
+                          [item.model_dump() for item in checks])
 
     @server.tool(annotations=repeat)
     async def save_v2_turn(session_id: SessionId, turn: Turn) -> dict[str, Any]:
