@@ -18,7 +18,8 @@ from starlette.concurrency import run_in_threadpool
 
 from .engine import Engine, EngineError
 from .mcp_models import (
-    AnchorBlock, AuditReport, Checksum, Correction, RangeBlock, Relationships,
+    AnchorBlock, AuditReport, Checksum, Correction, HistoricalHook, HookUpdate,
+    RangeBlock, Relationships,
     RequestId, ReviewCheck, RuleCheck, SessionId, State, ThreadUpdate, Turn, Version,
 )
 
@@ -75,12 +76,14 @@ def build_mcp(engine: Callable[[], Engine]) -> FastMCP:
         names: dict[str, str], genre_answers: dict[str, str] | None = None,
         relationships: Relationships | None = None,
         initial_threads: list[ThreadUpdate] | None = None,
+        initial_hooks: list[HookUpdate] | None = None,
     ) -> dict[str, Any]:
         """Create NEW NV2_ setup, preserving original verbatim and assigning every character once. Preview full canon before approval. Never migrate LITE_."""
         return await call(
             "create", original, [b.model_dump() for b in blocks], names, genre_answers,
             relationships.model_dump() if relationships is not None else None,
             [t.model_dump() for t in initial_threads] if initial_threads is not None else None,
+            [h.model_dump() for h in initial_hooks] if initial_hooks is not None else None,
         )
 
     @server.tool(annotations=read)
@@ -112,6 +115,28 @@ def build_mcp(engine: Callable[[], Engine]) -> FastMCP:
     ) -> dict[str, Any]:
         """Register a genuinely appeared NPC with a stable English name and established text. Reprepare before using its card/knowledge."""
         return await call("add_character", session_id, expected_version, name, display, established_text)
+
+    @server.tool(annotations=read)
+    async def get_v2_director_brief(session_id: SessionId) -> dict[str, Any]:
+        """MANDATORY BEFORE selecting participants for a new scene: read ALL
+        open arcs, independent unsolved hooks, explicit author appearance windows,
+        NPC goals and full cast IDs. This is director-only, not NPC knowledge.
+        Do not automatically force encounters, reveal hidden lore or invent events.
+        """
+        return await call("director_brief", session_id)
+
+    @server.tool(annotations=write)
+    async def backfill_v2_hooks(
+        session_id: SessionId, expected_version: Version,
+        additions: list[HistoricalHook],
+    ) -> dict[str, Any]:
+        """One-off safe existing-session story-memory backfill. Each hook MUST
+        quote the original author text (origin_turn=0) or a real archived scene.
+        Does not rewrite scenes, canon, relationships or open_threads.
+        The latest turn cannot be used while rollback is possible.
+        """
+        return await call("backfill_hooks", session_id, expected_version,
+                          [h.model_dump() for h in additions])
 
     @server.tool(annotations=repeat)
     async def prepare_v2_context(
@@ -154,7 +179,8 @@ def build_mcp(engine: Callable[[], Engine]) -> FastMCP:
 
     @server.tool(annotations=repeat)
     async def save_v2_turn(session_id: SessionId, turn: Turn) -> dict[str, Any]:
-        """Atomically commit the SAME request_id/packet/hashes/input. Save only evidenced personal knowledge, real relationship/arc changes. Publish only after saved=true."""
+        """Atomically save scene plus independent evidence-backed hook_updates. Never
+        erase old unresolved hooks when advancing another one. Publish only after saved=true."""
         return await call("commit", session_id, turn.model_dump(exclude_unset=True))
 
     @server.tool(annotations=write)
