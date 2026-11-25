@@ -175,6 +175,24 @@ class TestV2MCP(unittest.TestCase):
         self.assertEqual(versions["rules_sha256"], instructions["rules"]["sha256"])
         self.assertNotIn("content", json.dumps(versions))
 
+    def test_review_tool_returns_full_builder_failures_before_save(self):
+        sid = self.start()
+        p = self.tool("prepare_v2_context", session_id=sid,
+                      reader_text="Оглядываюсь", participants=["adrian"],
+                      kind="turn", request_id="preflight-mcp")
+        self.read(sid, p)
+        instructions = self.tool("load_v2_instructions")
+        reviewed = self.tool(
+            "review_v2_scene", session_id=sid,
+            expected_version=p["version"], packet_id=p["packet_id"],
+            request_id="preflight-mcp",
+            skin_sha256=instructions["skin_builder"]["sha256"],
+            narration="Один абзац без оформления.", checks=[])
+        self.assertFalse(reviewed["approved"])
+        self.assertTrue(any("Не проверен раздел" in item for item in reviewed["issues"]))
+        self.assertTrue(any("Шапка" in item for item in reviewed["issues"]))
+        self.assertEqual(self.tool("get_v2_status", session_id=sid)["turn"], 0)
+
     def use_empty_synthetic_skin_for_non_literary_storage_tests(self):
         """Legacy transaction/audit fixtures use one-sentence fake scenes.
         The real authored builder is exercised by test_scene_preflight.py.
