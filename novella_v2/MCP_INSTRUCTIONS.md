@@ -26,7 +26,9 @@ STORY DIRECTOR / PERSISTENT HOOKS (MANDATORY):
 Before choosing participants or calling prepare_v2_context for a NEW game
 turn, first call get_v2_director_brief(session_id). Read EVERY open arc and
 EVERY individual unresolved hook, promise, mystery, consequence, NPC goal,
-genre thread and explicit author appearance window. This read-only brief
+genre thread and explicit author appearance window. The server records a
+version-bound receipt and rejects prepare without it, even for an empty ledger.
+This brief
 does NOT move time, mutate the world, or grant facts to POV/NPC. The source
 of an author deadline is the original canon, never an invented timer or
 rotation scheme. Author-specified arrival windows take precedence over the
@@ -45,27 +47,40 @@ is the concise arc index, NOT a replacement for persistent mystery details.
 Use hook_updates in save_v2_turn only when a hook was truly introduced,
 progressed, blocked or resolved, with a literal quote from the FINAL scene.
 Updating one hook must NEVER erase any sibling hook or NPC objective.
+A closed hook remains stored with its specific outcome and exact evidence.
+A literal quote alone does NOT prove the stated outcome; audit its meaning.
+Do not return resolved obligations to the overdue list. Track each timed NPC
+appearance separately. Recorded participation is evidence to inspect, not
+a guarantee of the intended debut.
 Offscreen events must actually be narrated to count; do not invent unseen
 progress and claim it happened.
 
 The director brief also extracts literal author timing clauses from
 original.txt as author_window_candidates even when an older session has no
 hooks.md yet. These are SOURCE-QUOTED HINTS, not automatically persisted
-facts or mandatory instant appearances. Surface overdue untracked author
-windows instead of ignoring them; use evidence-based backfill when asked.
+facts or mandatory instant appearances. Review elapsed untracked author windows against first recorded participation
+and saved scenes; elapsed does not mean violated. Use historical backfill
+when asked. A blocked hook with a future in-world condition is not abandoned.
 
 For EXISTING sessions, hooks.md may legitimately be missing; do not wipe
 or automatically replace old history. When the reader explicitly requests
 plot-memory recovery, inspect original canon and actual saved history, then
 call backfill_v2_hooks with exact source snippets and origin_turn=0 for canon
-or the actual saved scene number. Never fabricate evidence, invent
-deadlines, change original canon, or use the still-rollbackable last turn.
-This action changes session version; reprepare afterward.
+or the actual saved scene number. Provide independent last_turn and last_evidence
+for later confirmed development. Historical fulfillment uses status=closed and
+actual completion evidence. For an existing open hook use reconcile=true;
+for a mistaken closure use reopen=true with the original identity and evidence.
+Never fabricate evidence, invent deadlines, change original canon, or cite the
+still-rollbackable last turn. Backfill survives a later rollback. This action
+changes session version; call director again and reprepare afterward.
 
-At the 15/60 audit, when hooks exist, supply report.story mapping EVERY
-open hook ID to a specific note under 'hook:<id>' and EVERY unresolved
-arc under 'arc:<id>', including not-started lines, overdue author
-appearances, stagnating NPC goals and genre strands. Do not force an
+At the 15/60 audit, when any hooks, arcs or literal author windows exist,
+supply report.story mapping EVERY hook (including closed) to a specific note
+under 'hook:<id>', EVERY unresolved arc under 'arc:<id>', and EVERY ID from
+audit_author_windows ('window:...') to its history-based assessment. Check
+not-started lines, actual completion, overdue appearances, waiting conditions,
+stagnating NPC goals, and genre strands. All unresolved hooks and canon windows
+are covered even when the ledger is empty. Do not force an
 event merely because the audit flags a long gap. Check independent quote
 provenance, and preserve existing user choices and storyline pace.
 
