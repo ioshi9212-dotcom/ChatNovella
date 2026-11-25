@@ -196,6 +196,39 @@ class TestStoryHooks(unittest.TestCase):
         self.assertEqual(self.engine.history(sid)[-1]["hook_updates"][0]["status"],
                          "closed")
 
+    def test_cannot_close_arc_while_sibling_hooks_remain(self):
+        sid = self.make()
+        p = self.packet(sid, 1)
+        data = {
+            "request_id": "hook-turn-1", "expected_version": p["version"],
+            "packet_id": p["packet_id"], "chunk_hashes": p["chunk_hashes"],
+            "reader_text": "1", "narration": PROGRESS,
+            "participants": ["adrian"], "state": state(1),
+            "knowledge": [], "events": [], "relations": [],
+            "thread_updates": [{
+                "id": "rabbits", "title": "Кроличья нора",
+                "status": "closed", "note": "Завершено",
+                "source": PROGRESS,
+            }],
+        }
+        with self.assertRaisesRegex(EngineError, "An arc cannot close"):
+            self.engine.commit(sid, data)
+        self.assertEqual(self.engine.status(sid)["turn"], 0)
+
+    def test_repeated_unchanged_hooks_cannot_hide_staleness(self):
+        source = story_hooks.seed([
+            hook("nathan_client", "Неизвестный заказчик Натана",
+                 "mystery", CLIENT, participants=["adrian"])
+        ], CANON, {"adrian"})
+        change = hook("nathan_client", "Неизвестный заказчик Натана",
+                      "mystery", PROGRESS, status="active",
+                      detail="Натан знает заказчика, имени не назвал",
+                      participants=["adrian"])
+        progressed, _ = story_hooks.apply(source, [change], PROGRESS, 1,
+                                          {"adrian"})
+        with self.assertRaisesRegex(story_hooks.HookProblem, "real status"):
+            story_hooks.apply(progressed, [change], PROGRESS, 2, {"adrian"})
+
     def test_author_deadlines_are_diagnostic_not_forced_plot_events(self):
         row = story_hooks.seed(
             [hook("seline_arrival", "Селин", "appearance", APPEARANCE,
