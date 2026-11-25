@@ -58,11 +58,11 @@ def clean(row: dict, cast: set[str] | None = None) -> dict:
         check(row["window_start"] <= row["window_end"], "Reversed author window")
     if row["window_end"] is not None:
         check(row["origin_turn"] == 0 and
-              str(row["window_end"]) in row["origin"], 
+              re.search(rf"(?<![0-9]){row['window_end']}(?![0-9])", row["origin"]) is not None, 
               "Turn deadlines must have literal author-canon evidence")
     if row["window_start"] is not None:
         check(row["origin_turn"] == 0 and
-              str(row["window_start"]) in row["origin"],
+              re.search(rf"(?<![0-9]){row['window_start']}(?![0-9])", row["origin"]) is not None,
               "Turn windows must have literal author-canon evidence")
     return {
         "id": row["id"], "arc_id": row["arc_id"],
@@ -201,6 +201,47 @@ def backfill(text: str, additions: list[dict], original: str,
         check(row["status"] != "closed", "Backfill only unresolved hooks")
         current[row["id"]] = clean(_new(row, quote_turn), cast)
     return render(list(current.values()), cast)
+
+
+_AUTHOR_RANGE = re.compile(
+    r"(?iu)(?<!\d)(\d{1,5})\s*(?:-(?:м|й|го|ого|му))?\s*"
+    r"(?:и|по|до|[-–—])\s*"
+    r"(\d{1,5})\s*(?:-(?:м|й|го|ого|му))?\s*ход"
+)
+_AUTHOR_UP_TO = re.compile(
+    r"(?iu)\bдо\s+(\d{1,5})\s*(?:-(?:м|й|го|ого|му))?\s*ход"
+)
+_AUTHOR_ENTRY = re.compile(r"(?iu)появ|ввод|войти|войд|приход|встреч|долж|обяз")
+
+
+def author_window_candidates(original: str, turn: int) -> list[dict]:
+    """Extract literal author deadline mentions even in legacy sessions.
+
+    Hints are NEVER automatically saved as hooks or used to fake an
+    event. The director reviews quoted text before adding a verified
+    sourced hook. A sentence with no explicit bound is not a deadline.
+    """
+    if not isinstance(original, str):
+        return []
+    candidates: list[dict] = []
+    for line_no, raw in enumerate(original.splitlines(), start=1):
+        line = raw.strip()
+        if not _AUTHOR_ENTRY.search(line) or "ход" not in line.casefold():
+            continue
+        found = list(_AUTHOR_RANGE.finditer(line))
+        if found:
+            windows = [(int(m.group(1)), int(m.group(2))) for m in found]
+        else:
+            windows = [(None, int(m.group(1))) for m in _AUTHOR_UP_TO.finditer(line)]
+        for lower, upper in windows:
+            if upper < 1 or (lower is not None and lower > upper):
+                continue
+            candidates.append({
+                "source_line": line_no, "source": line[:500],
+                "window_start": lower, "window_end": upper,
+                "overdue": turn + 1 > upper,
+            })
+    return candidates
 
 
 def director_brief(items: list[dict], turn: int) -> dict:
