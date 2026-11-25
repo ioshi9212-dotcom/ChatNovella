@@ -412,6 +412,8 @@ class TestStoryHooks(unittest.TestCase):
                  quote, status="closed", detail="Заказчиком назван Марк",
                  participants=["adrian"])
         ])
+        brief = self.engine.director_brief(sid)
+        self.assertEqual(brief["resolved_hooks"][0]["detail"], "Заказчиком назван Марк")
         self.packet(sid, 2)
         packet = json.loads((self.engine.root / sid / "system/packet.json").read_text())
         self.assertEqual(packet["resolved_outcomes"][0]["detail"], "Заказчиком назван Марк")
@@ -500,7 +502,9 @@ class TestStoryHooks(unittest.TestCase):
         self.assertIn("after_photo", overview["conditions_due"])
 
     def test_audit_rotates_old_closures_without_dropping_current_hooks(self):
-        rows = [{"id": f"old_{i:04d}", "arc_id": "archived", "status": "closed",
+        # Even 1500 old resolutions inside a still-open long arc do not
+        # become 1500 mandatory prose reports at every short audit.
+        rows = [{"id": f"old_{i:04d}", "arc_id": "live_arc", "status": "closed",
                  "kind": "mystery", "window_end": None, "last_turn": 1}
                 for i in range(1500)]
         rows.append({"id": "live_hook", "arc_id": "live_arc", "status": "active",

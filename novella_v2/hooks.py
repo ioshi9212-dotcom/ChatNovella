@@ -429,10 +429,11 @@ def outcome_index(items: list[dict]) -> list[dict]:
 
 def audit_selection(items: list[dict], arcs: list[dict], turn: int,
                     level: int, cursor: int = 0) -> tuple[list[dict], int]:
-    active_arcs = {a["id"] for a in arcs}
+    dependencies = {h["trigger"][5:] for h in items
+                    if h["status"] != "closed" and (h.get("trigger") or "").startswith("hook:")}
     selected, archive = [], []
     for h in items:
-        if (h["status"] != "closed" or h["arc_id"] in active_arcs
+        if (h["status"] != "closed" or h["id"] in dependencies
                 or h["window_end"] is not None or h["kind"] == "appearance"
                 or h["last_turn"] > turn - 60):
             selected.append(h)
@@ -450,6 +451,7 @@ def audit_selection(items: list[dict], arcs: list[dict], turn: int,
 def plan_ids(overview: dict, arcs: list[dict], windows: list[dict]) -> tuple[set[str], set[str]]:
     valid = {"arc:" + a["id"] for a in arcs}
     valid.update("hook:" + h["id"] for h in overview["unresolved_hooks"])
+    valid.update("hook:" + h["id"] for h in overview["resolved_hooks"])
     valid.update(w["id"] for w in windows)
     priority = {"hook:" + ident for key in ("author_deadlines_overdue",
                 "author_windows_active", "appearance_review", "conditions_due",

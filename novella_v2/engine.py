@@ -776,12 +776,15 @@ class Engine:
                 "director_valid_ids": sorted(valid),
                 "director_priority_ids": sorted(priority),
             }))
-            for field in ("unresolved_hooks", "resolved_hooks"):
-                overview[field] = [
-                    {k: v for k, v in row.items() if k not in {"origin", "last_evidence"}}
-                    for row in overview[field]
-                    if field != "resolved_hooks" or row["window_end"] is not None
-                    or row["kind"] == "appearance"]
+            # Compact completed facts are available BEFORE the plan as well as
+            # in the writing packet. Full evidence stays in the ledger.
+            overview["unresolved_hooks"] = [
+                {k: v for k, v in row.items() if k not in {"origin", "last_evidence"}}
+                for row in overview["unresolved_hooks"]]
+            overview["resolved_hooks"] = [
+                {k: row[k] for k in ("id", "arc_id", "title", "kind", "detail",
+                                     "last_turn", "deadline_state")}
+                for row in overview["resolved_hooks"]]
             return {
                 "session_id": sid, "version": meta["version"],
                 "turn": meta["turn"],
@@ -1051,6 +1054,8 @@ class Engine:
                                 if kind == "turn" else [],
                             "audit_author_windows": audit_windows,
                             "audit_story_ids": audit_ids,
+                            "audit_first_recorded_participation": self._first_seen(path, meta)
+                                if kind == "audit" else {},
                             "story_health": {
                                 "overdue_hook_ids": plot_health["author_deadlines_overdue"],
                                 "active_author_window_ids": plot_health["author_windows_active"],

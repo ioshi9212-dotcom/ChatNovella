@@ -88,7 +88,7 @@ reason to defer). Required when plot records/windows exist; recommended even
 when empty. Plan is not an event; never force an encounter or progress quota.
 Use trigger date:YYYY-MM-DD, turn:N, hook:ID for known waiting conditions,
 otherwise text. Due does not mean forced. Closed results remain in
-resolved_outcomes. Record actual consequences as separate hooks. Every open
+resolved_hooks of the director brief and resolved_outcomes of the turn packet. Record actual consequences as separate hooks. Every open
 hook needs an existing open arc; repair missing arcs with explicit historical
 arc_repairs (id,title,status,note,source,origin_turn) in backfill_v2_hooks.
 Call prepare_v2_context with that ID, exact reader_text and real participants. If already_committed_duplicate
