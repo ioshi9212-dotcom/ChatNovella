@@ -97,6 +97,7 @@ class TestSceneReview(unittest.TestCase):
         sections = review_sections(self.skin)
         self.assertGreaterEqual(len(sections), 10)
         self.assertIn("СЦЕНЫ ЗА КАДРОМ", sections)
+        self.assertIn("ПРОВЕРКА ПЕРЕД ВЫВОДОМ", sections)
         self.assertIn("ПОЛНАЯ АВТОНОМИЯ НПС", sections)
         self.assertIn("КОНЕЦ СЦЕНЫ", sections)
         self.assertTrue(any("Не проверен раздел" in e
