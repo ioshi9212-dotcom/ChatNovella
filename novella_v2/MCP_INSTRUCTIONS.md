@@ -69,10 +69,21 @@ cards and knowledge boundaries, genre execution, director continuity, ending,
 suggested choices, state/relationships output and ALL other authored rules.
 Check EVERY applicable instruction within EACH heading, not just the heading.
 
-For EACH actual section of the current Skin Builder provide a ReviewCheck
-{section, result: pass | not_applicable | fail, note: specific finding}
-to review_v2_scene, with request_id, packet_id, expected_version, exact
-narration and skin_sha256 from the loaded Skin Builder. Server verifies the
+After loading instructions, call get_v2_review_manifest ONCE per chat
+(or after an explicit instructions refresh) to obtain the COMPLETE list
+of substantive authored rule lines with stable IDs. Never call it every turn.
+For EACH section submit ReviewCheck {section, result, note}. In addition,
+for EVERY authored line from that manifest submit RuleCheck
+{id, result: pass | not_applicable | fail, note: specific explanation,
+evidence: literal excerpt from the FINAL narration if pass, otherwise null}.
+A blanket section PASS is NOT proof of compliance: the server requires
+all individual rules and verifies exact literal excerpts for PASS.
+For SMS/messages visibly presented as sender and timestamp, the server
+independently rejects ordinary unframed text; use a visibly separate chat
+block (e.g. Markdown quote/bubble), never just name and time.
+Use the actual Skin Builder to judge EVERY other requirement as written.
+Call review_v2_scene with BOTH checks and rule_checks, request_id,
+packet_id, expected_version, final narration and current skin_sha256. Server verifies the
 complete heading set, mandatory machine-checkable layout, final narration
 digest and current Skin Builder version; review_v2_scene returns approved.
 Never call save_v2_turn without approved=true for the EXACT final text.
