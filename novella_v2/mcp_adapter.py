@@ -127,6 +127,22 @@ def build_mcp(engine: Callable[[], Engine]) -> FastMCP:
         return await call("read_chunk", session_id, packet_id, index)
 
     @server.tool(annotations=repeat)
+    async def review_v2_scene(
+        session_id: SessionId, expected_version: Version,
+        packet_id: str, request_id: RequestId, skin_sha256: Checksum,
+        narration: str, checks: list[ReviewCheck],
+    ) -> dict[str, Any]:
+        """MANDATORY before saving an authored V2 scene. Audit EVERY section
+        of the current full Skin Builder, including all individual rules.
+        Fix any failed sections and rerun review on the exact final narration.
+        Server checks mandatory formatting and binds approval to the final text.
+        Never show an unapproved draft to the reader.
+        """
+        return await call("review_scene", session_id, expected_version,
+                          packet_id, request_id, skin_sha256, narration,
+                          [item.model_dump() for item in checks])
+
+    @server.tool(annotations=repeat)
     async def save_v2_turn(session_id: SessionId, turn: Turn) -> dict[str, Any]:
         """Atomically commit the SAME request_id/packet/hashes/input. Save only evidenced personal knowledge, real relationship/arc changes. Publish only after saved=true."""
         return await call("commit", session_id, turn.model_dump(exclude_unset=True))
