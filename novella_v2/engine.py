@@ -698,6 +698,82 @@ class Engine:
                 "all_chunks_read": not unread,
                 "first_chunk_included": False}
 
+    def director_brief(self, sid: str) -> dict:
+        """READ BEFORE choosing participants; never alter game time or scenes.
+
+        The brief exposes ALL unresolved arc and hook obligations plus the
+        complete cast ID index. Actual character cards are loaded only later
+        by prepare with relevant participants.
+        """
+        with self._locked(sid) as (path, meta):
+            cast = self._cast(path)
+            saved = (self._read(path, "hooks.md")
+                     if (path / "hooks.md").exists() else story_hooks.HEADER)
+            hooks = story_hooks.parse(saved, cast)
+            arcs = open_threads.parse(
+                self._read(path, "open_threads.md")
+                if (path / "open_threads.md").exists() else open_threads.HEADER)
+            novel = self._read(path, "novel.md")
+            display = {}
+            for line in novel.splitlines():
+                match = re.match(r"^- ([a-z][a-z0-9_]{1,49}) — (.+)$", line)
+                if match and match.group(1) in cast:
+                    display[match.group(1)] = match.group(2)
+            return {
+                "session_id": sid, "version": meta["version"],
+                "turn": meta["turn"], "cast": [
+                    {"id": c, "display": display.get(c, c)} for c in sorted(cast)
+                ], "open_arcs": arcs,
+                **story_hooks.director_brief(hooks, meta["turn"]),
+                "empty_ledger": not hooks,
+                "instructions": ("Use this BEFORE choosing participants. "
+                                 "Check all author deadlines and ongoing NPC goals. "
+                                 "Do not force an arbitrary appearance or give "
+                                 "director-only information to POV/NPC. For an "
+                                 "entering NPC, load its FULL card via prepare."),
+            }
+
+    def backfill_hooks(self, sid: str, expected_version: int,
+                       additions: list[dict]) -> dict:
+        """Safe explicit migration of EXISTING sessions from exact old sources.
+
+        Does not alter approved canon, open_threads, state, history or any
+        relationship. The caller must provide real canonical/archived quotes.
+        A new version invalidates any prepared packet; reprepare afterward.
+        """
+        with self._locked(sid) as (path, meta):
+            self._version(meta, expected_version)
+            need(meta["approved"], "NOT_APPROVED", "Approve canon before backfill")
+            need(isinstance(additions, list) and bool(additions),
+                 "HOOK_BACKFILL_EMPTY", "Supply proven unresolved hooks")
+            active = self._active(path)
+            last = meta["turn"]
+            # The most recently saved turn may still be rolled back; do not
+            # pin new permanent memory to an unstable source.
+            for item in additions:
+                need(isinstance(item, dict) and
+                     item.get("origin_turn") != last or last == 0,
+                     "HOOK_BACKFILL_LAST_TURN",
+                     "Backfill from earlier scenes or the author original; "
+                     "the latest turn can still be rolled back")
+            original = self._read(path, "original.txt")
+            need(digest(original) == meta["original_hash"], "ORIGINAL_CORRUPTED",
+                 "Original canon must be intact before backfill")
+            old = (self._read(path, "hooks.md")
+                   if (path / "hooks.md").exists() else story_hooks.HEADER)
+            updated = story_hooks.backfill(
+                old, additions, original,
+                {row["turn"]: row["narration"] for row in active},
+                last, self._cast(path))
+            need(updated != old, "HOOK_BACKFILL_UNCHANGED", "No new hooks supplied")
+            newer = {**meta, "version": meta["version"] + 1,
+                     "packet": None, "scene_review": None}
+            self._write(path, meta, {"hooks.md": updated}, newer)
+            return {"updated": True, "session_id": sid,
+                    "version": newer["version"],
+                    "added": len(additions),
+                    "unresolved": len(story_hooks.parse(updated))}
+
     def prepare(self, sid: str, reader_text: str = "",
                 participants: list[str] | None = None, kind: str = "turn",
                 request_id: str | None = None) -> dict:
