@@ -167,6 +167,35 @@ class TestV2MCP(unittest.TestCase):
             **self.headers, "Host": "untrusted.example"})
         self.assertEqual(hostile.status_code, 421)
 
+    def test_director_and_evidence_only_hook_backfill_via_mcp(self):
+        sid = self.start()
+        original = self.tool("get_v2_director_brief", session_id=sid)
+        self.assertTrue(original["empty_ledger"])
+        self.assertIn("open_arcs", original)
+        self.assertIn("cast", original)
+        version = self.tool("get_v2_status", session_id=sid)["version"]
+        migrated = self.tool("backfill_v2_hooks", session_id=sid,
+                             expected_version=version, additions=[{
+                                 "id": "missing_key_hook", "arc_id": "missing_key",
+                                 "title": "Пропавший ключ", "kind": "mystery",
+                                 "status": "open",
+                                 "detail": "Неизвестно, кто забрал ключ из шкафа",
+                                 "participants": ["adrian"],
+                                 "source": "Пропал ключ от шкафа.",
+                                 "origin_turn": 0,
+                             }])
+        self.assertTrue(migrated["updated"])
+        brief = self.tool("get_v2_director_brief", session_id=sid)
+        self.assertEqual(brief["unresolved_hooks"][0]["id"], "missing_key_hook")
+        self.assertFalse(brief["empty_ledger"])
+        packet = self.tool("prepare_v2_context", session_id=sid,
+                           reader_text="Смотрю на шкаф",
+                           participants=["adrian"], kind="turn",
+                           request_id="mcp-hook-inspection")
+        files = self.read(sid, packet)
+        self.assertIn("hooks.md", files)
+        self.assertIn("missing_key_hook", files["hooks.md"])
+
     def test_instructions_hashes_and_author_skin_unchanged(self):
         instructions = self.tool("load_v2_instructions")
         for name in ("rules", "skin_builder"):
