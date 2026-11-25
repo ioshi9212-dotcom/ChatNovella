@@ -46,6 +46,8 @@ class TestEngine(unittest.TestCase):
                 "objects": ["телефон на столе"], "unfinished": []}
 
     def packet(self, text="Привет", participants=None, kind="turn"):
+        if kind == "turn":
+            self.engine.director_brief(self.sid)
         packet = self.engine.prepare(self.sid, text, participants or ["adrian"], kind)
         content = []
         for index in range(packet["chunk_count"]):
@@ -129,6 +131,7 @@ class TestEngine(unittest.TestCase):
         st = self.engine.status(other)
         self.engine.approve(other, st["version"], st["canon_hash"], "Подтверждаю")
         self.engine.set_opening(other, self.engine.status(other)["version"], self.state(0))
+        self.engine.director_brief(other)
         packet = self.engine.prepare(other, "Привет", ["adrian"])
         parts = [self.engine.read_chunk(other, packet["packet_id"], i)["content"]
                  for i in range(packet["chunk_count"])]
@@ -138,6 +141,7 @@ class TestEngine(unittest.TestCase):
         self.assertNotIn("characters/silas.md", payload["files"])
 
     def test_unread_chunks_block_commit(self):
+        self.engine.director_brief(self.sid)
         packet = self.engine.prepare(self.sid, "Привет", ["adrian"])
         data = self.turn(packet=packet)
         with self.assertRaisesRegex(EngineError, "Read and verify all"):
