@@ -77,6 +77,7 @@ class TestStoryHooks(unittest.TestCase):
         return sid
 
     def packet(self, sid, number):
+        self.engine.director_brief(sid)
         p = self.engine.prepare(
             sid, str(number), ["adrian"], "turn", f"hook-turn-{number}")
         for i in p["unread_chunk_indices"]:
@@ -186,13 +187,14 @@ class TestStoryHooks(unittest.TestCase):
 
     def test_closed_hook_does_not_erase_sibling(self):
         sid = self.make()
-        self.turn(sid, 1, PROGRESS, updates=[
+        resolved = "Натан назвал заказчика: им оказался Марк."
+        self.turn(sid, 1, resolved, updates=[
             hook("nathan_client", "Неизвестный заказчик Натана",
-                 "mystery", PROGRESS, status="closed",
-                 detail="Натан подтвердил имя",
+                 "mystery", resolved, status="closed",
+                 detail="Заказчиком Натана оказался Марк",
                  participants=["adrian"])])
-        self.assertEqual([h["id"] for h in self.saved_hooks(sid)],
-                         ["seline_arrival"])
+        self.assertEqual({h["id"]: h["status"] for h in self.saved_hooks(sid)},
+                         {"nathan_client": "closed", "seline_arrival": "open"})
         self.assertEqual(self.engine.history(sid)[-1]["hook_updates"][0]["status"],
                          "closed")
 
@@ -232,10 +234,10 @@ class TestStoryHooks(unittest.TestCase):
     def test_author_deadlines_are_diagnostic_not_forced_plot_events(self):
         row = story_hooks.seed(
             [hook("seline_arrival", "Селин", "appearance", APPEARANCE,
-                  window_start=90, window_end=120)], CANON, {"seline"})
+                  window_start=90, window_end=120, participants=["seline"])], CANON, {"seline"})
         hook_rows = story_hooks.parse(row, {"seline"})
         overview = story_hooks.director_brief(hook_rows, 153)
-        self.assertEqual(overview["author_deadlines_overdue"][0]["id"],
+        self.assertEqual(overview["author_deadlines_overdue"][0],
                          "seline_arrival")
         self.assertEqual(overview["unresolved_hooks"][0]["last_turn"], 0)
         hints = story_hooks.author_window_candidates(CANON, 153)
@@ -251,6 +253,76 @@ class TestStoryHooks(unittest.TestCase):
         self.assertEqual({h["window_end"] for h in hints}, {50, 100, 120})
         self.assertTrue(all(str(h["window_end"]) in h["source"] for h in hints))
         self.assertTrue(all(h["overdue"] for h in hints))
+
+    def test_director_receipt_expires_at_next_turn(self):
+        sid = self.make()
+        with self.assertRaisesRegex(EngineError, "Read director brief"):
+            self.engine.prepare(sid, "1", ["adrian"], request_id="hook-turn-1")
+        self.turn(sid, 1)
+        with self.assertRaisesRegex(EngineError, "Read director brief"):
+            self.engine.prepare(sid, "2", ["adrian"], request_id="hook-turn-2")
+
+    def test_backfill_survives_last_scene_rollback_and_keeps_last_development(self):
+        sid = self.make(initial=False)
+        self.turn(sid, 1, HISTORY_QUOTE)
+        self.turn(sid, 2, PROGRESS)
+        self.turn(sid, 3)
+        version = self.engine.status(sid)["version"]
+        result = self.engine.backfill_hooks(sid, version, [
+            {**hook("nathan_client", "Заказчик Натана", "mystery", CLIENT,
+                    detail="Имя неизвестно, заказчик приходил лично"),
+             "origin_turn": 0, "last_turn": 2, "last_evidence": PROGRESS}
+        ])
+        self.engine.rollback(sid, result["version"], "hook-turn-3", "Отмена")
+        hooks = self.saved_hooks(sid)
+        self.assertEqual(hooks[0]["origin_turn"], 0)
+        self.assertEqual(hooks[0]["last_turn"], 2)
+        self.assertEqual(hooks[0]["last_evidence"], PROGRESS)
+
+    def test_appearance_completion_retained_with_actual_turn(self):
+        row = story_hooks.seed([
+            hook("seline_arrival", "Селин", "appearance", APPEARANCE,
+                 window_start=90, window_end=120, participants=["seline"])
+        ], CANON, {"seline"})
+        quote = "Селин вошла и представилась."
+        row, _ = story_hooks.apply(row, [
+            hook("seline_arrival", "Селин", "appearance", quote,
+                 status="closed", detail="Селин вошла в историю и представилась",
+                 participants=["seline"])
+        ], quote, 100, {"seline"})
+        brief = story_hooks.director_brief(story_hooks.parse(row), 153)
+        self.assertEqual(brief["author_deadlines_overdue"], [])
+        self.assertEqual(brief["resolved_hooks"][0]["deadline_state"], "fulfilled")
+        self.assertEqual(brief["resolved_hooks"][0]["last_turn"], 100)
+
+    def test_ledger_deletion_is_detected_even_with_valid_empty_header(self):
+        sid = self.make()
+        (self.engine.root / sid / "hooks.md").write_text(
+            story_hooks.HEADER, encoding="utf-8")
+        with self.assertRaisesRegex(EngineError, "Story memory changed"):
+            self.engine.director_brief(sid)
+
+    def test_explicit_reopening_keeps_original_evidence(self):
+        sid = self.make()
+        quote = "Натан назвал заказчика: им оказался Марк."
+        self.turn(sid, 1, quote, [
+            hook("nathan_client", "Неизвестный заказчик Натана", "mystery",
+                 quote, status="closed", detail="Заказчиком назван Марк",
+                 participants=["adrian"])
+        ])
+        self.turn(sid, 2, PROGRESS)
+        self.turn(sid, 3)
+        version = self.engine.status(sid)["version"]
+        self.engine.backfill_hooks(sid, version, [
+            {**hook("nathan_client", "Неизвестный заказчик Натана", "mystery",
+                     CLIENT, status="active", detail="Натан не раскрыл имя",
+                     participants=["adrian"]),
+             "origin_turn": 0, "last_turn": 2, "last_evidence": PROGRESS,
+             "reopen": True}
+        ])
+        rows = {h["id"]: h for h in self.saved_hooks(sid)}
+        self.assertEqual(rows["nathan_client"]["status"], "active")
+        self.assertEqual(rows["nathan_client"]["origin"], CLIENT)
 
     def test_audit_requires_every_hook_and_arc_and_checks_provenance(self):
         sid = self.make()
