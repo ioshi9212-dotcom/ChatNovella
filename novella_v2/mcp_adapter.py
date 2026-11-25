@@ -116,7 +116,7 @@ def build_mcp(engine: Callable[[], Engine]) -> FastMCP:
         """Register a genuinely appeared NPC with a stable English name and established text. Reprepare before using its card/knowledge."""
         return await call("add_character", session_id, expected_version, name, display, established_text)
 
-    @server.tool(annotations=read)
+    @server.tool(annotations=repeat)
     async def get_v2_director_brief(session_id: SessionId) -> dict[str, Any]:
         """MANDATORY BEFORE selecting participants for a new scene: read ALL
         open arcs, independent unsolved hooks, explicit author appearance windows,
@@ -133,6 +133,8 @@ def build_mcp(engine: Callable[[], Engine]) -> FastMCP:
         """One-off safe existing-session story-memory backfill. Each hook MUST
         quote the original author text (origin_turn=0) or a real archived scene.
         Does not rewrite scenes, canon, relationships or open_threads.
+        Supply origin_turn and optional last_turn/last_evidence separately.
+        Reopen an incorrectly closed hook with reopen=true and the same identity.
         The latest turn cannot be used while rollback is possible.
         """
         return await call("backfill_hooks", session_id, expected_version,
