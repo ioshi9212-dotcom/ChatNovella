@@ -752,7 +752,7 @@ class Engine:
             # pin new permanent memory to an unstable source.
             for item in additions:
                 need(isinstance(item, dict) and
-                     item.get("origin_turn") != last or last == 0,
+                     (last == 0 or item.get("origin_turn") != last),
                      "HOOK_BACKFILL_LAST_TURN",
                      "Backfill from earlier scenes or the author original; "
                      "the latest turn can still be rolled back")
@@ -1008,7 +1008,7 @@ class Engine:
                     "reader_text", "narration", "participants", "state",
                     "knowledge", "events", "relations"}
         need(isinstance(data, dict) and required <= set(data) and
-             set(data) <= required | {"thread_updates", "scene_access"},
+             set(data) <= required | {"thread_updates", "hook_updates", "scene_access"},
              "TURN_FIELDS", "Turn payload has fixed storage fields")
         req = data["request_id"]
         need(isinstance(req, str) and 1 <= len(req) <= 100, "REQUEST_ID", "Invalid request id")
@@ -1119,6 +1119,11 @@ class Engine:
             after_threads, thread_changes = open_threads.apply(
                 before_threads, data.get("thread_updates", []),
                 data["narration"], meta["turn"] + 1)
+            before_hooks = (self._read(path, "hooks.md")
+                            if (path / "hooks.md").exists() else story_hooks.HEADER)
+            after_hooks, hook_changes = story_hooks.apply(
+                before_hooks, data.get("hook_updates", []),
+                data["narration"], meta["turn"] + 1, cast)
             need(isinstance(data["relations"], list), "RELATION_CHANGES", "Relations must be a list")
             for change in data["relations"]:
                 if isinstance(change, dict):
@@ -1133,9 +1138,12 @@ class Engine:
                 files["relationships.md"] = after_rel
             if after_threads != before_threads:
                 files["open_threads.md"] = after_threads
+            if after_hooks != before_hooks:
+                files["hooks.md"] = after_hooks
             before = {"state.md": self._read(path, "state.md"),
                       "relationships.md": before_rel, "timeline.md": before_timeline,
-                      "open_threads.md": before_threads}
+                      "open_threads.md": before_threads,
+                      "hooks.md": before_hooks}
             need(isinstance(data["knowledge"], list), "KNOWLEDGE_TYPE",
                  "Knowledge entries must be a list")
             knowledge_rows: list[dict] = []
@@ -1196,6 +1204,7 @@ class Engine:
                       "knowledge": knowledge_rows,
                       "events": data["events"], "relations": data["relations"],
                       "thread_updates": thread_changes,
+                      "hook_updates": hook_changes,
                       "warnings": warnings}
             due = 60 if (meta["turn"] + 1) % 60 == 0 else \
                   15 if (meta["turn"] + 1) % 15 == 0 else 0
