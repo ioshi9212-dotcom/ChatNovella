@@ -113,7 +113,7 @@ def rule_report_errors(skin: str, narration: str, report: list[dict]) -> list[st
 # Strong high-confidence signs of a message being presented to the reader as
 # sender + timestamp + text, rather than a character merely using a phone.
 _SENDER_TIME = re.compile(
-    r"^\s*(?:\*\*)?[А-ЯЁA-Z][\wА-ЯЁа-яё .-]{0,39}(?:\*\*)?"
+    r"(?<!\w)(?:\*\*)?[А-ЯЁA-Z][\wА-ЯЁа-яё .-]{0,39}(?:\*\*)?"
     r"\s*(?:[,·—-]\s*)?[\[(]?(?:[01]?\d|2[0-3]):[0-5]\d[\])]?"
     r"\s*[:—-]?\s*\S+"
 )
@@ -138,7 +138,7 @@ def messenger_layout_errors(skin: str, narration: str) -> list[str]:
         value = line.strip()
         if not value:
             continue
-        if not (_SENDER_TIME.match(value) or _SMS_TEXT.match(value)):
+        if not (_SENDER_TIME.search(value) or _SMS_TEXT.search(value)):
             continue
         # The frame may begin on the preceding line or be an explicit
         # message bubble/quote on the sender line itself.
