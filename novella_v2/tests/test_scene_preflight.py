@@ -135,6 +135,9 @@ class TestSceneReview(unittest.TestCase):
 
     def test_cannot_skip_individual_rule_or_fake_evidence(self):
         self.assertGreater(len(review_items(self.skin)), 50)
+        authored = [item["text"] for item in review_items(self.skin)]
+        self.assertTrue(any("АВТОНОМИЯ ПОВ:" in text for text in authored))
+        self.assertTrue(any("ОТВЕТ ЧИТАТЕЛЯ:" in text for text in authored))
         items = self.rule_checks()
         self.assertTrue(any("Не проверено правило" in x for x in
                             rule_report_errors(self.skin, scene(), items[:-1])))
