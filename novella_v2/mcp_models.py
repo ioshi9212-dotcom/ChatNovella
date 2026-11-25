@@ -58,6 +58,23 @@ class HookUpdate(Model):
     trigger: str | None = None
 
 
+class StoryPlan(Model):
+    focus_ids: list[str]
+    direction: str
+    world: str
+    deferred: str
+    priority: dict[str, str]
+
+
+class HistoricalArc(Model):
+    id: str
+    title: str
+    status: Literal["not_started", "active"]
+    note: str
+    source: Annotated[str, Field(min_length=8, max_length=350)]
+    origin_turn: Annotated[int, Field(ge=0)]
+
+
 class HistoricalHook(HookUpdate):
     """Backfilled source: 0=original canon, N=archived turn N."""
     origin_turn: Annotated[int, Field(ge=0)]
@@ -157,7 +174,7 @@ class AuditReport(Model):
     knowledge: Annotated[str, Field(min_length=1)]
     timeline: Annotated[str, Field(min_length=1)]
     relationships: Annotated[str, Field(min_length=1)]
-    story: dict[str, str] | None = None  # required whenever hooks, arcs or author timing clauses exist
+    story: dict[str, str] | None = None  # required for exact audit_story_ids from current packet
     long_term: Annotated[str, Field(min_length=1)] | None = None
 
 

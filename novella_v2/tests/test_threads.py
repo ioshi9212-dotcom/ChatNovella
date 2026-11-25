@@ -7,6 +7,7 @@ from tempfile import TemporaryDirectory
 import unittest
 
 from novella_v2.engine import Engine, EngineError, empty_actor, digest
+from novella_v2.tests.test_story_hooks import fixture_plan
 from novella_v2.threads import HEADER, MAX_OPEN, ThreadProblem, parse, render, seed, apply
 
 
@@ -43,9 +44,8 @@ class TestOpenThreads(unittest.TestCase):
         return self.engine.root / self.sid / name
 
     def prepared(self, text="Читаю письмо", kind="turn"):
-        if kind == "turn":
-            self.engine.director_brief(self.sid)
-        packet = self.engine.prepare(self.sid, text, ["adrian"], kind)
+        plan = fixture_plan(self.engine.director_brief(self.sid)) if kind == "turn" else None
+        packet = self.engine.prepare(self.sid, text, ["adrian"], kind, story_plan=plan)
         raw = "".join(self.engine.read_chunk(self.sid, packet["packet_id"], i)["content"]
                       for i in range(packet["chunk_count"]))
         self.assertEqual(digest(raw), packet["sha256"])

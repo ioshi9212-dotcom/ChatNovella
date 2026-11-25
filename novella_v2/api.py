@@ -103,7 +103,7 @@ def director(sid: str):
 @app.post("/v2/novels/{sid}/hooks/backfill")
 def hooks_backfill(sid: str, body: dict):
     return store.backfill_hooks(
-        sid, body["expected_version"], body["additions"])
+        sid, body["expected_version"], body["additions"], body.get("arc_repairs"))
 
 
 @app.post("/v2/novels/{sid}/prepare")
@@ -111,7 +111,7 @@ def prepare(sid: str, body: dict):
     return store.prepare(sid, reader_text=body.get("reader_text", ""),
                          participants=body.get("participants", []),
                          kind=body.get("kind", "turn"),
-                         request_id=body.get("request_id"))
+                         request_id=body.get("request_id"), story_plan=body.get("story_plan"))
 
 
 @app.get("/v2/novels/{sid}/chunks/{packet_id}/{index}")

@@ -32,6 +32,14 @@ def hook(id, title, kind, source, *, arc_id="rabbits",
     }
 
 
+def fixture_plan(brief):
+    return {"focus_ids": [], "direction": "Тестовая сцена сохраняет непрерывность.",
+            "world": "В этом тестовом эпизоде нет закадровых изменений.",
+            "deferred": "Открытые линии сохраняются до подходящего события.",
+            "priority": {i: "Проверено; ждём подходящего сюжетного развития."
+                         for i in brief["plan_priority_ids"]}}
+
+
 def state(turn):
     return {"turn": turn, "datetime": "2026-05-05T19:00:00",
             "location": "Комната", "pov": empty_actor(),
@@ -77,9 +85,10 @@ class TestStoryHooks(unittest.TestCase):
         return sid
 
     def packet(self, sid, number):
-        self.engine.director_brief(sid)
+        brief = self.engine.director_brief(sid)
         p = self.engine.prepare(
-            sid, str(number), ["adrian"], "turn", f"hook-turn-{number}")
+            sid, str(number), ["adrian"], "turn", f"hook-turn-{number}",
+            story_plan=fixture_plan(brief))
         for i in p["unread_chunk_indices"]:
             self.engine.read_chunk(sid, p["packet_id"], i)
         return p
@@ -348,11 +357,12 @@ class TestStoryHooks(unittest.TestCase):
         ledger = story_hooks.seed([
             hook("hana_photo", "Фотографии Ханы", "commitment",
                  "Фотографии Ханы будут сделаны 10 мая.", status="blocked",
-                 trigger="10 мая"),
+                 trigger="date:2026-05-10"),
             hook("seline_arrival", "Селин", "appearance", APPEARANCE,
                  participants=["seline"], window_start=90, window_end=120),
         ], original, {"seline"})
-        brief = story_hooks.director_brief(story_hooks.parse(ledger), 50)
+        brief = story_hooks.director_brief(story_hooks.parse(ledger), 50,
+                                          world_datetime="2026-05-05T19:00:00")
         self.assertEqual(brief["stale_hooks"], [])
         self.assertEqual(next(h for h in brief["unresolved_hooks"]
                               if h["id"] == "hana_photo")["deadline_state"],

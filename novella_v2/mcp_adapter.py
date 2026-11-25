@@ -18,7 +18,7 @@ from starlette.concurrency import run_in_threadpool
 
 from .engine import Engine, EngineError
 from .mcp_models import (
-    AnchorBlock, AuditReport, Checksum, Correction, HistoricalHook, HookUpdate,
+    AnchorBlock, AuditReport, Checksum, Correction, HistoricalArc, HistoricalHook, HookUpdate, StoryPlan,
     RangeBlock, Relationships,
     RequestId, ReviewCheck, RuleCheck, SessionId, State, ThreadUpdate, Turn, Version,
 )
@@ -128,26 +128,33 @@ def build_mcp(engine: Callable[[], Engine]) -> FastMCP:
     @server.tool(annotations=write)
     async def backfill_v2_hooks(
         session_id: SessionId, expected_version: Version,
-        additions: list[HistoricalHook],
+        additions: list[HistoricalHook], arc_repairs: list[HistoricalArc] | None = None,
     ) -> dict[str, Any]:
         """One-off safe existing-session story-memory backfill. Each hook MUST
         quote the original author text (origin_turn=0) or a real archived scene.
-        Does not rewrite scenes, canon, relationships or open_threads.
+        Does not rewrite scenes, canon or relationships. Explicit arc_repairs can restore
+        missing open arcs with archived evidence; use stable existing arc IDs.
         Supply origin_turn and optional last_turn/last_evidence separately.
         Reopen an incorrectly closed hook with reopen=true and the same identity.
         Reconcile an existing open hook with historical closure using reconcile=true.
         The latest turn cannot be used while rollback is possible.
         """
         return await call("backfill_hooks", session_id, expected_version,
-                          [h.model_dump() for h in additions])
+                          [h.model_dump() for h in additions],
+                          [a.model_dump() for a in (arc_repairs or [])])
 
     @server.tool(annotations=repeat)
     async def prepare_v2_context(
         session_id: SessionId, reader_text: str, participants: list[str],
         kind: Literal["turn", "audit", "canon"], request_id: RequestId,
+        story_plan: StoryPlan | None = None,
     ) -> dict[str, Any]:
-        """Keep one request_id per turn. Replay saved duplicates; resume only unread chunks. Every packet includes full relationships and open_threads, not Rules/Skin."""
-        return await call("prepare", session_id, reader_text, participants, kind, request_id)
+        """Use director first, then provide a short story_plan for plot-bearing turns.
+        focus_ids are known arc:/hook:/window: IDs; direction, world, deferred explain
+        the choice; priority maps exact plan_priority_ids to decisions. No quotas.
+        Keep request_id and plan on retries. No plan for canon/audit."""
+        return await call("prepare", session_id, reader_text, participants, kind, request_id,
+                          story_plan.model_dump() if story_plan is not None else None)
 
     @server.tool(annotations=repeat)
     async def read_v2_chunk(session_id: SessionId, packet_id: str, index: int) -> dict[str, Any]:

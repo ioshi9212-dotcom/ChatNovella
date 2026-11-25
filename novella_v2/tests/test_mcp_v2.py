@@ -12,6 +12,7 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 import novella_v2.api as api
+from novella_v2.tests.test_story_hooks import fixture_plan
 from novella_v2.engine import Engine, empty_actor
 
 
@@ -63,7 +64,8 @@ class TestV2MCP(unittest.TestCase):
 
     def tool(self, tool_name, **arguments):
         if tool_name == "prepare_v2_context" and arguments.get("kind") == "turn":
-            self.tool("get_v2_director_brief", session_id=arguments["session_id"])
+            brief = self.tool("get_v2_director_brief", session_id=arguments["session_id"])
+            arguments.setdefault("story_plan", fixture_plan(brief))
         result = self.rpc("tools/call", {"name": tool_name, "arguments": arguments})
         self.assertFalse(result.get("isError"), result)
         return result["structuredContent"]
@@ -293,8 +295,9 @@ class TestV2MCP(unittest.TestCase):
                           name="marcus", display="Маркус", established_text="Маркус вошёл и назвался.")
         self.assertGreater(added["version"], status["version"])
         for number in range(1, 16):
-            self.engine.director_brief(sid)
-            packet = self.engine.prepare(sid, str(number), ["adrian"], "turn", f"audit-seed-{number}")
+            brief = self.engine.director_brief(sid)
+            packet = self.engine.prepare(sid, str(number), ["adrian"], "turn", f"audit-seed-{number}",
+                                         story_plan=fixture_plan(brief))
             for index in packet["unread_chunk_indices"]:
                 self.engine.read_chunk(sid, packet["packet_id"], index)
             self.engine.commit(sid, {
