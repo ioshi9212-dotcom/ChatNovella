@@ -98,7 +98,7 @@ def atomic(path: Path, content: str) -> None:
 
 def safe_rel(name: str) -> bool:
     return (name in {"state.md", "relationships.md", "timeline.md", "history.jsonl",
-                     "system/audit.jsonl", "novel.md", "open_threads.md"}
+                     "system/audit.jsonl", "novel.md", "open_threads.md", "hooks.md"}
             or bool(re.fullmatch(r"(?:characters|knowledge)/[a-z][a-z0-9_]{1,49}\.md", name)))
 
 
