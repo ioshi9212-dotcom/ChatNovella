@@ -242,6 +242,16 @@ class TestStoryHooks(unittest.TestCase):
         self.assertEqual(hints[0]["window_start"], 90)
         self.assertTrue(hints[0]["overdue"])
 
+    def test_long_author_line_preserves_multiple_deadlines(self):
+        original = ("Обстоятельства. " * 55 +
+                    "Кэллум появляется между 35-м и 50-м ходом. "
+                    "Селин появляется между 90-м и 120-м ходом. "
+                    "Остальные персонажи должны появиться до 100-го хода.")
+        hints = story_hooks.author_window_candidates(original, 153)
+        self.assertEqual({h["window_end"] for h in hints}, {50, 100, 120})
+        self.assertTrue(all(str(h["window_end"]) in h["source"] for h in hints))
+        self.assertTrue(all(h["overdue"] for h in hints))
+
     def test_audit_requires_every_hook_and_arc_and_checks_provenance(self):
         sid = self.make()
         for number in range(1, 16):
