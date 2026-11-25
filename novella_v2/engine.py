@@ -1410,8 +1410,12 @@ class Engine:
                        audit_due=due, packet=None,
                        last_undo={"request_id": req, "before": before,
                                   "prior_turn": meta["turn"],
-                                  "prior_first_seen": first_seen_before,
                                   "prior_audit_due": meta["audit_due"]})
+            # Director receipt belongs to the previous version; avoid retaining
+            # large unused planning indexes in session metadata.
+            for key in tuple(new):
+                if key.startswith("director_"):
+                    del new[key]
             result = {"saved": True, "session_id": sid, "turn": new["turn"],
                       "version": new["version"], "audit_due": due,
                       "narration": data["narration"], "warnings": warnings}
@@ -1445,8 +1449,9 @@ class Engine:
                        audit_due=undo["prior_audit_due"],
                         hook_file_hash=digest(files.get("hooks.md", self._hook_ledger(path, meta))),
                        last_undo=None, packet=None)
-            if "prior_first_seen" in undo:
-                new["first_seen"] = undo["prior_first_seen"]
+            if "first_seen" in meta:
+                new["first_seen"] = {name: turn for name, turn in meta["first_seen"].items()
+                                     if turn <= undo["prior_turn"]}
             else:
                 new.pop("first_seen", None)  # legacy undo; rebuild from active archive
             new["requests"][request_id]["reverted"] = True
@@ -1474,9 +1479,6 @@ class Engine:
                 self._read(path, "open_threads.md")
                 if (path / "open_threads.md").exists() else open_threads.HEADER)
             story_hooks.validate_links(hook_rows, arc_rows)
-            need(packet.get("source_signature") ==
-                 self._source_signature(path, set(packet["participants"]), "audit"),
-                 "SOURCE_CHANGED", "Audit source changed; prepare again")
             windows = self._author_windows(self._read(path, "original.txt"),
                                            hook_rows, meta["turn"])
             review_rows, next_audit_cursor = story_hooks.audit_selection(
@@ -1644,6 +1646,9 @@ class Engine:
                              existing_files["timeline.md"],
                              "AUDIT_MISSING_EVENT",
                              "A previously saved world event disappeared from timeline.md")
+            need(packet.get("source_signature") ==
+                 self._source_signature(path, set(packet["participants"]), "audit"),
+                 "SOURCE_CHANGED", "Audit source changed; prepare again")
             audit_log = self._read(path, "system/audit.jsonl")
             for line in audit_log.splitlines():
                 if not line.strip():
