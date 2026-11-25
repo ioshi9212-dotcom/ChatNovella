@@ -750,6 +750,17 @@ class Engine:
                 "director_arc_hash": digest(arcs_text),
             }))
             overview = story_hooks.director_brief(hooks, meta["turn"])
+            # Participation is evidence, not proof of the author's intended arrival.
+            for h in overview["unresolved_hooks"]:
+                if h["kind"] == "appearance" and len(h["participants"]) == 1:
+                    first = first_seen.get(h["participants"][0])
+                    if first is not None:
+                        h["first_recorded_participation"] = first
+                        h["deadline_state"] = "appearance_recorded_needs_review"
+                        if h["id"] in overview["author_deadlines_overdue"]:
+                            overview["author_deadlines_overdue"].remove(h["id"])
+                        if h["id"] in overview["author_windows_active"]:
+                            overview["author_windows_active"].remove(h["id"])
             for field in ("unresolved_hooks", "resolved_hooks"):
                 overview[field] = [
                     {k: v for k, v in row.items() if k not in {"origin", "last_evidence"}}
@@ -962,6 +973,8 @@ class Engine:
             recent = [] if kind == "canon" else _recent_turns(path, 15 if kind == "audit" else 3)
             plot_health = story_hooks.director_brief(
                 story_hooks.parse(files["hooks.md"], cast), meta["turn"])
+            audit_windows = (story_hooks.author_window_candidates(
+                self._read(path, "original.txt"), meta["turn"]) if kind == "audit" else [])
             if kind == "turn":
                 # Closed non-author mysteries stay in persistent memory and audit,
                 # not in every writing packet.
@@ -973,6 +986,8 @@ class Engine:
                             "audit_due": meta["audit_due"], "participants": sorted(relevant),
                             "instructions_mode": "loaded_once_per_chat",
                             "files": files, "recent_scenes": recent,
+                             "audit_author_windows": [{k: v for k, v in w.items() if k != "overdue"}
+                                                      for w in audit_windows],
                              "story_health": {
                                  "overdue_hook_ids": plot_health["author_deadlines_overdue"],
                                   "active_author_window_ids": plot_health["author_windows_active"],
@@ -1377,15 +1392,18 @@ class Engine:
                 if (path / "open_threads.md").exists() else open_threads.HEADER)
             # A populated durable ledger requires a thorough plot audit.
             # Old sessions with only the one-line arc index remain compatible.
-            if hook_rows or arc_rows:
+            windows = story_hooks.author_window_candidates(
+                self._read(path, "original.txt"), meta["turn"])
+            if hook_rows or arc_rows or windows:
                 required.add("story")
             need(isinstance(report, dict) and set(report) == required and all(
                  isinstance(report[k], str) and bool(report[k].strip())
                  for k in required - {"story"}),
                  "AUDIT_REPORT", "Audit must check required domains")
-            if hook_rows or arc_rows:
+            if hook_rows or arc_rows or windows:
                 expected = ({"hook:" + h["id"] for h in hook_rows} |
-                            {"arc:" + a["id"] for a in arc_rows})
+                            {"arc:" + a["id"] for a in arc_rows} |
+                            {w["id"] for w in windows})
                 actual = report["story"]
                 need(isinstance(actual, dict) and set(actual) == expected and
                      all(isinstance(note, str) and len(note.strip()) >= 16
@@ -1489,6 +1507,7 @@ class Engine:
                      hook["last_evidence"] in latest_text,
                      "AUDIT_HOOK_PROVENANCE",
                      "Unresolved hook has no exact original or scene evidence")
+            hook_ids = {h["id"] for h in hook_rows}
             existing_files: dict[str, str] = {}
             for old_turn in archived:
                 for fact in old_turn.get("knowledge", []):
@@ -1521,6 +1540,8 @@ class Engine:
                          "AUDIT_THREAD_PROVENANCE",
                          "Thread change is not anchored to its saved scene")
                 for hook in old_turn.get("hook_updates", []):
+                    need(hook["id"] in hook_ids, "AUDIT_MISSING_HOOK",
+                         "A previously recorded hook disappeared from persistent memory")
                     need(hook["source"] in old_turn["narration"],
                          "AUDIT_HOOK_PROVENANCE",
                          "Hook change is not anchored to its saved scene")
@@ -1534,10 +1555,18 @@ class Engine:
                              "AUDIT_MISSING_EVENT",
                              "A previously saved world event disappeared from timeline.md")
             audit_log = self._read(path, "system/audit.jsonl")
+            for line in audit_log.splitlines():
+                if not line.strip():
+                    continue
+                event = json.loads(line)
+                if event.get("kind") == "hook_backfill":
+                    need(all(h["id"] in hook_ids for h in event["added"]),
+                         "AUDIT_MISSING_HOOK", "A backfilled story hook disappeared")
             changes["system/audit.jsonl"] = audit_log + dump(
                 {"turn": meta["turn"], "level": meta["audit_due"],
                  "report": report, "corrections": trail}) + "\n"
             new = {**meta, "version": meta["version"] + 1, "audit_due": 0,
+                   "hook_file_hash": digest(hook_ledger),
                    "packet": None, "last_undo": None}
             if "relationships.md" in changes:
                 new["relationship_file_hash"] = digest(changes["relationships.md"])
