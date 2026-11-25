@@ -138,9 +138,6 @@ class TestStoryHooks(unittest.TestCase):
         ledger.unlink()
         self.assertTrue(self.engine.director_brief(sid)["empty_ledger"])
         p = self.packet(sid, 1)
-        content = json.loads("".join(self.engine.read_chunk(
-            sid, p["packet_id"], i)["content"]
-            for i in [])) if False else None  # no duplicate read
         packet = json.loads((self.engine.root / sid / "system/packet.json").read_text())
         self.assertEqual(packet["files"]["hooks.md"], story_hooks.HEADER)
         self.turn(sid, 1, HISTORY_QUOTE)
@@ -160,7 +157,7 @@ class TestStoryHooks(unittest.TestCase):
         self.assertEqual(
             {h["id"] for h in self.engine.director_brief(sid)["unresolved_hooks"]},
             {"nathan_client", "julian_watch"})
-        with self.assertRaises(EngineError):
+        with self.assertRaises(story_hooks.HookProblem):
             self.engine.backfill_hooks(sid, result["version"], [
                 {**hook("nathan_client", "Попытка переписать", "mystery", CLIENT),
                  "origin_turn": 0},
