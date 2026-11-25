@@ -35,6 +35,117 @@ def review_sections(skin: str) -> list[str]:
     return result or ["SKIN BUILDER: ВЕСЬ ТЕКСТ"]
 
 
+def review_items(skin: str) -> list[dict]:
+    """Every substantive authored line needs an individual review record.
+
+    IDs are stable within an immutable SHA-pinned Skin Builder. Author text
+    is preserved verbatim in the manifest; templates, examples and long
+    multi-clause rules are NOT collapsed into vague section-level passes.
+    """
+    if not skin.strip():
+        return []
+    current = "ФОРМАТ СЦЕНЫ"
+    result: list[dict] = []
+    for n, raw in enumerate(skin.splitlines(), start=1):
+        line = raw.strip()
+        if not line or line in ("-", "***") or line.startswith("Версия "):
+            continue
+        numbered = re.match(r"^###\s*\d+\.\s*(.+?)\s*$", line)
+        named = _HEADING.match(line)
+        if numbered or named:
+            current = (numbered or named).group(1).strip()
+            continue
+        # Descriptive fiction/legal preface is not an actionable scene rule.
+        if line.startswith("{Данные правила применяются"):
+            continue
+        result.append({"id": f"L{n}", "section": current, "text": line})
+    return result
+
+
+def rule_report_errors(skin: str, narration: str, report: list[dict]) -> list[str]:
+    """Fail closed on missing rules; require literal scene evidence for passes."""
+    expected = {r["id"]: r for r in review_items(skin)}
+    if not isinstance(report, list):
+        return ["Отсутствует построчная проверка всех правил Skin Builder"]
+    issues: list[str] = []
+    seen: set[str] = set()
+    for item in report:
+        if not isinstance(item, dict) or set(item) != {
+            "id", "result", "note", "evidence"
+        }:
+            issues.append("Проверка правила должна иметь id, result, note, evidence")
+            continue
+        key = item["id"]
+        if not isinstance(key, str) or key in seen:
+            issues.append("Дублированный или неверный идентификатор правила")
+            continue
+        seen.add(key)
+        if key not in expected:
+            issues.append("Проверен чужой или устаревший пункт: " + key)
+            continue
+        verdict, reason, evidence = item["result"], item["note"], item["evidence"]
+        if verdict not in ("pass", "not_applicable", "fail"):
+            issues.append("Некорректная оценка пункта " + key)
+        if not isinstance(reason, str) or len(reason.strip()) < 18:
+            issues.append("Нет конкретного объяснения пункта " + key)
+        if verdict == "fail":
+            issues.append("Неисправленное нарушение правила " + key + ": " +
+                          str(reason)[:150])
+        if verdict == "pass":
+            if not isinstance(evidence, str) or len(evidence) < 8 or evidence not in narration:
+                issues.append("Нет точной цитаты из сцены для проверки " + key)
+        elif evidence is not None:
+            issues.append("Для неприменимого пункта " + key + " evidence должен быть null")
+    for key in expected:
+        if key not in seen:
+            issues.append("Не проверено правило Skin Builder: " + key +
+                          " — " + expected[key]["text"][:100])
+    return issues
+
+
+# Strong high-confidence signs of a message being presented to the reader as
+# sender + timestamp + text, rather than a character merely using a phone.
+_SENDER_TIME = re.compile(
+    r"^\s*(?:\*\*)?[А-ЯЁA-Z][\wА-ЯЁа-яё .-]{0,39}(?:\*\*)?"
+    r"\s*(?:[,·—-]\s*)?[\[(]?(?:[01]?\d|2[0-3]):[0-5]\d[\])]?"
+    r"\s*[:—-]?\s*\S+"
+)
+_SMS_TEXT = re.compile(
+    r"^\s*(?:СМС|SMS|сообщение)\s+от\s+\S+.*?[:—]\s*\S+", re.IGNORECASE
+)
+_CHAT_VISUAL = re.compile(r"^\s*(?:>|[│┃║╭┌└╰💬📱📩✉️])")
+
+
+def messenger_layout_errors(skin: str, narration: str) -> list[str]:
+    """Reject *plain* sender/time messages that lack visual message framing.
+
+    Does not enforce one invented bubble style: Markdown blockquotes, Unicode
+    chat boxes and explicit phone/message frames are valid alternatives.
+    """
+    if not re.search(r"мес+ен[дж]?|мессендж", skin, re.IGNORECASE):
+        return []
+    result = []
+    main = narration.split(_CHOICE[0], 1)[0]
+    for idx, line in enumerate(main.splitlines()):
+        value = line.strip()
+        if not value:
+            continue
+        if not (_SENDER_TIME.match(value) or _SMS_TEXT.match(value)):
+            continue
+        lines = main.splitlines()
+        # The frame may begin on the preceding line or be an explicit
+        # message bubble/quote on the sender line itself.
+        visual = any(_CHAT_VISUAL.match(lines[i]) for i in (
+            idx, max(0, idx - 1), min(len(lines) - 1, idx + 1)
+        ))
+        if not visual:
+            result.append(
+                f"Сообщение в строке {idx + 1} оформлено обычным текстом: "
+                "требуется визуально выделенный блок мессенджера"
+            )
+    return result
+
+
 def _model_choice_count(skin: str, heading: str) -> int:
     start = skin.find(heading)
     if start < 0:
@@ -85,6 +196,7 @@ def layout_errors(skin: str, narration: str, turn: int) -> list[str]:
         required = _model_choice_count(skin, heading)
         if required and count != required:
             errors.append(f"{heading} ожидалось {required} вариантов, найдено {count}")
+    errors.extend(messenger_layout_errors(skin, narration))
     if "Состояние:" in skin and "Состояние:" not in text:
         errors.append("Отсутствует строка Состояние")
     turn_marker = re.compile(rf"\bХод\s+{turn}\s*·\s*цикл\s+{((turn - 1) % 15) + 1}/15\b")
