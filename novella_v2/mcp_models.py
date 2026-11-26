@@ -151,6 +151,12 @@ class RuleCheck(Model):
     evidence: str | None = None
 
 
+class NewCharacterProposal(Model):
+    name: str
+    display: Annotated[str, Field(min_length=1, max_length=120)]
+    established_text: Annotated[str, Field(min_length=8, max_length=4000)]
+
+
 class Turn(Model):
     request_id: RequestId
     expected_version: Version

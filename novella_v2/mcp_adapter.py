@@ -18,7 +18,7 @@ from starlette.concurrency import run_in_threadpool
 
 from .engine import Engine, EngineError
 from .mcp_models import (
-    AnchorBlock, AuditReport, Checksum, Correction, HistoricalArc, HistoricalHook, HookUpdate, StoryPlan,
+    AnchorBlock, AuditReport, Checksum, Correction, HistoricalArc, HistoricalHook, HookUpdate, StoryPlan, NewCharacterProposal,
     RangeBlock, Relationships,
     RequestId, ReviewCheck, RuleCheck, SessionId, State, ThreadUpdate, Turn, Version,
 )
@@ -108,12 +108,12 @@ def build_mcp(engine: Callable[[], Engine]) -> FastMCP:
         return await call("set_opening", session_id, expected_version, state.model_dump(),
                           relationships.model_dump() if relationships is not None else None)
 
-    @server.tool(annotations=write)
+    @server.tool(annotations=read)
     async def add_v2_character(
         session_id: SessionId, expected_version: Version,
         name: str, display: str, established_text: str,
     ) -> dict[str, Any]:
-        """Register a genuinely appeared NPC with a stable English name and established text. Reprepare before using its card/knowledge."""
+        """Validate a temporary NPC proposal only. Pass returned proposal in prepare_v2_context.new_characters; final reviewed scene save creates permanent files."""
         return await call("add_character", session_id, expected_version, name, display, established_text)
 
     @server.tool(annotations=repeat)
@@ -148,13 +148,17 @@ def build_mcp(engine: Callable[[], Engine]) -> FastMCP:
         session_id: SessionId, reader_text: str, participants: list[str],
         kind: Literal["turn", "audit", "canon"], request_id: RequestId,
         story_plan: StoryPlan | None = None,
+        new_characters: list[NewCharacterProposal] | None = None,
     ) -> dict[str, Any]:
         """Use director first, then provide a short story_plan for plot-bearing turns.
         focus_ids are known arc:/hook:/window: IDs; direction, world, deferred explain
         the choice; priority maps exact plan_priority_ids to decisions. No quotas.
-        Keep request_id and plan on retries. No plan for canon/audit."""
+        Keep request_id and plan on retries. New NPCs use new_characters (name, display,
+        established_text: planned exact scene excerpt). These are temporary until
+        reviewed commit. No proposals or plan for canon/audit."""
         return await call("prepare", session_id, reader_text, participants, kind, request_id,
-                          story_plan.model_dump() if story_plan is not None else None)
+                          story_plan.model_dump() if story_plan is not None else None,
+                          [row.model_dump() for row in new_characters] if new_characters is not None else None)
 
     @server.tool(annotations=repeat)
     async def read_v2_chunk(session_id: SessionId, packet_id: str, index: int) -> dict[str, Any]:

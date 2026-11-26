@@ -111,7 +111,8 @@ def prepare(sid: str, body: dict):
     return store.prepare(sid, reader_text=body.get("reader_text", ""),
                          participants=body.get("participants", []),
                          kind=body.get("kind", "turn"),
-                         request_id=body.get("request_id"), story_plan=body.get("story_plan"))
+                         request_id=body.get("request_id"), story_plan=body.get("story_plan"),
+                         new_characters=body.get("new_characters"))
 
 
 @app.get("/v2/novels/{sid}/chunks/{packet_id}/{index}")

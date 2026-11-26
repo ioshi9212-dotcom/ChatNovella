@@ -295,18 +295,29 @@ class TestV2MCP(unittest.TestCase):
         status = self.engine.status(sid)
         added = self.tool("add_v2_character", session_id=sid, expected_version=status["version"],
                           name="marcus", display="Маркус", established_text="Маркус вошёл и назвался.")
-        self.assertGreater(added["version"], status["version"])
+        self.assertEqual(added["version"], status["version"])
+        self.assertFalse(added["added"])
+        self.assertFalse((self.data / sid / "characters/marcus.md").exists())
         for number in range(1, 16):
             brief = self.engine.director_brief(sid)
-            packet = self.engine.prepare(sid, str(number), ["adrian"], "turn", f"audit-seed-{number}",
-                                         story_plan=fixture_plan(brief))
+            people = ["adrian", "marcus"] if number == 1 else ["adrian"]
+            packet = self.engine.prepare(sid, str(number), people, "turn", f"audit-seed-{number}",
+                                         story_plan=fixture_plan(brief),
+                                         new_characters=[added["proposal"]] if number == 1 else None)
             for index in packet["unread_chunk_indices"]:
                 self.engine.read_chunk(sid, packet["packet_id"], index)
+            narration = f"Адриан перелистнул страницу {number}."
+            state = self.state(number)
+            if number == 1:
+                narration += " Маркус вошёл и назвался."
+                state["present"]["marcus"] = empty_actor()
+                self.assertTrue(self.engine.review_scene(sid, packet["version"], packet["packet_id"],
+                    "audit-seed-1", packet["skin_sha256"], narration, [], [])["approved"])
             self.engine.commit(sid, {
                 "request_id": f"audit-seed-{number}", "expected_version": packet["version"],
                 "packet_id": packet["packet_id"], "chunk_hashes": packet["chunk_hashes"],
-                "reader_text": str(number), "narration": f"Адриан перелистнул страницу {number}.",
-                "participants": ["adrian"], "state": self.state(number),
+                "reader_text": str(number), "narration": narration,
+                "participants": people, "state": state,
                 "knowledge": [], "events": [], "relations": [],
             })
         blocked = self.rpc("tools/call", {"name": "prepare_v2_context", "arguments": {

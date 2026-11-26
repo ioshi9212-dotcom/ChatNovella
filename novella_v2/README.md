@@ -102,7 +102,9 @@ chatnovella/, chatnovella_lite/ и прежние плагины в GitHub ос�
   дословная цитата из original.
 - POST /{sid}/approve — expected_version, canon_hash, confirmation.
 - POST /{sid}/opening — expected_version, state, необязательные relationships.
-- POST /{sid}/characters — добавить реально появившегося персонажа.
+- POST /{sid}/characters — проверить временное предложение NPC (без записи).
+  Передать proposal в prepare.new_characters; только проверенный commit
+  регистрирует реально появившегося NPC, а rollback удаляет созданные файлы.
 - POST /{sid}/prepare — reader_text, participants, kind=turn|audit|canon,
   необязательный постоянный request_id для игрового хода.
 - GET /{sid}/chunks/{packet_id}/{index} — получить часть и отметку чтения.

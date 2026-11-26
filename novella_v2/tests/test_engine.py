@@ -45,10 +45,11 @@ class TestEngine(unittest.TestCase):
                 "present": {"adrian": empty_actor()}, "remote": {},
                 "objects": ["телефон на столе"], "unfinished": []}
 
-    def packet(self, text="Привет", participants=None, kind="turn"):
+    def packet(self, text="Привет", participants=None, kind="turn", new_characters=None):
         if kind == "turn":
             self.engine.director_brief(self.sid)
-        packet = self.engine.prepare(self.sid, text, participants or ["adrian"], kind)
+        packet = self.engine.prepare(self.sid, text, participants or ["adrian"], kind,
+                                     new_characters=new_characters)
         content = []
         for index in range(packet["chunk_count"]):
             part = self.engine.read_chunk(self.sid, packet["packet_id"], index)
@@ -211,7 +212,7 @@ class TestEngine(unittest.TestCase):
 
     def test_new_character_requires_reprepare(self):
         st = self.engine.status(self.sid)
-        self.engine.add_character(self.sid, st["version"], "marcus", "Маркус",
+        proposal = self.engine.add_character(self.sid, st["version"], "marcus", "Маркус",
                                   "Вошёл в комнату и назвался Маркусом.")
         packet, payload = self.packet()
         self.assertNotIn("characters/marcus.md", payload["files"])
@@ -220,7 +221,8 @@ class TestEngine(unittest.TestCase):
         data["participants"].append("marcus")
         with self.assertRaisesRegex(EngineError, "Load any entering character"):
             self.engine.commit(self.sid, data)
-        new_packet, new_payload = self.packet(participants=["adrian", "marcus"])
+        new_packet, new_payload = self.packet(participants=["adrian", "marcus"],
+                                              new_characters=[proposal["proposal"]])
         self.assertIn("characters/marcus.md", new_payload["files"])
         self.assertGreater(new_packet["version"], 0)
 

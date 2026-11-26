@@ -39,8 +39,17 @@ report it; NEVER retroactively invent or rewrite scenes to pretend compliance.
 
 Use the brief + reader's input + current scene to decide participants; load
 FULL character cards for every genuinely participating NPC with prepare.
-For entering characters not already prepared, reprepare once and read the
-new packet. A director-only actor who acts OFFSCREEN is not automatically
+For existing entering characters not already prepared, reprepare once and read
+the new packet. For genuinely new NPCs, pass new_characters to prepare:
+{name, display, established_text} (stable English ID, name, planned literal
+scene excerpt). add_v2_character is validation only; it returns a proposal,
+not a registered character. Proposals live in the current packet only,
+not in canon, state or knowledge files. If the final draft changes the
+excerpt, reprepare with the corrected proposal and review again. Only
+approved final narration with the exact excerpt and actual participation
+registers a new NPC in the same commit as all game changes. Unused proposals
+are discarded. Rollback of that turn removes its new NPC documents and cast
+entries; original canon and cancelled archive narration stay intact. A director-only actor who acts OFFSCREEN is not automatically
 POV knowledge, and cannot receive personal knowledge without validated
 scene access.
 
@@ -174,7 +183,10 @@ The server cannot verify artistic meaning; the model must make the review
 specific and faithful to the author's ENTIRE Skin Builder. Never rewrite the
 author's Skin Builder itself to satisfy the review.
 
-Commit using the ORIGINAL request_id, packet_id, chunk_hashes and reader_text.
+Before approval and commit, do NOT mutate any game documents, including NPC
+cards, history, timeline, relationships, knowledge, hooks, arcs and world state.
+Review writes only a technical receipt. Derive all updates from the approved
+final narration. Commit using the ORIGINAL request_id, packet_id, chunk_hashes and reader_text.
 Publish narration ONLY after saved=true; return the confirmed saved narration.
 Identical retries must preserve the entire payload and must not create a turn.
 On timeout/5xx retry that exact operation at most twice. If save status is
