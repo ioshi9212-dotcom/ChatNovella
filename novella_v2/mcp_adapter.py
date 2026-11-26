@@ -113,7 +113,7 @@ def build_mcp(engine: Callable[[], Engine]) -> FastMCP:
         session_id: SessionId, expected_version: Version,
         name: str, display: str, established_text: str,
     ) -> dict[str, Any]:
-        """Validate a temporary NPC proposal only. Pass returned proposal in prepare_v2_context.new_characters; final reviewed scene save creates permanent files."""
+        """Validate a temporary NPC proposal only. Pass returned proposal in prepare_v2_context.new_characters; final successful scene save creates permanent files."""
         return await call("add_character", session_id, expected_version, name, display, established_text)
 
     @server.tool(annotations=repeat)
@@ -155,7 +155,7 @@ def build_mcp(engine: Callable[[], Engine]) -> FastMCP:
         the choice; priority maps exact plan_priority_ids to decisions. No quotas.
         Keep request_id and plan on retries. New NPCs use new_characters (name, display,
         established_text: planned exact scene excerpt). These are temporary until
-        reviewed commit. If the excerpt changes, save_v2_turn.new_character_evidence
+        successful commit. If the excerpt changes, save_v2_turn.new_character_evidence
         can provide the final quote. No proposals or plan for canon/audit."""
         return await call("prepare", session_id, reader_text, participants, kind, request_id,
                           story_plan.model_dump() if story_plan is not None else None,
@@ -168,7 +168,7 @@ def build_mcp(engine: Callable[[], Engine]) -> FastMCP:
 
     @server.tool(annotations=read)
     async def get_v2_review_manifest() -> dict[str, Any]:
-        """Optional inspection; final turn chunks already contain current review section names and rule IDs. No extra manifest call in normal turn loading."""
+        """Inspect retained strict reviewer only. Do not call for normal turns, especially when scene_review_enabled=false."""
         return await call("scene_review_manifest")
 
     @server.tool(annotations=repeat)
@@ -178,7 +178,8 @@ def build_mcp(engine: Callable[[], Engine]) -> FastMCP:
         narration: str, checks: list[ReviewCheck],
         rule_checks: list[RuleCheck] | None = None,
     ) -> dict[str, Any]:
-        """MANDATORY before saving an authored V2 scene. Audit EVERY section
+        """Only when prepare.scene_review_enabled=true. Disabled by default: skip this tool.
+        In strict mode, audit EVERY section
         of the current full Skin Builder, including all individual rules.
         Fix any failed sections and rerun review on the exact final narration.
         Server checks mandatory formatting and binds approval to the final text.
@@ -191,7 +192,8 @@ def build_mcp(engine: Callable[[], Engine]) -> FastMCP:
 
     @server.tool(annotations=repeat)
     async def save_v2_turn(session_id: SessionId, turn: Turn) -> dict[str, Any]:
-        """Atomically save scene plus independent evidence-backed hook_updates. Never
+        """When scene_review_enabled=false, save final narration directly without review.
+        Atomically save scene plus independent evidence-backed hook_updates. Never
         erase old unresolved hooks when advancing another one. Publish only after saved=true."""
         return await call("commit", session_id, turn.model_dump(exclude_unset=True))
 

@@ -48,7 +48,7 @@ not in canon, state or knowledge files. If the final draft changes the
 excerpt, pass the exact final quote in save_v2_turn.new_character_evidence
 (mapping staged NPC ID to quote). No reprepare solely for a changed quote
 if the NPC identity and participants are unchanged. Only
-approved final narration with the exact excerpt and actual participation
+final narration with the exact excerpt and actual participation
 registers a new NPC in the same commit as all game changes. Unused proposals
 are discarded. Rollback of that turn removes its new NPC documents and cast
 entries; original canon and cancelled archive narration stay intact. A director-only actor who acts OFFSCREEN is not automatically
@@ -146,7 +146,16 @@ substantially changed or actually closed threads, with stable id and an exact
 source quote from narration. Otherwise use []. Closed threads leave the
 working file but remain archived. No forced deadlines or scheduled revelations.
 
-MANDATORY FULL SKIN BUILDER SCENE PREFLIGHT BEFORE EVERY SAVE:
+SCENE REVIEW MODE (server-controlled; disabled by default):
+Read scene_review_enabled from prepare and the final Skin Builder block.
+If false, DO NOT call review_v2_scene or get_v2_review_manifest, create
+review reports, enforce separate machine literary format, or loop rewriting.
+Write the scene directly according to the fresh full Skin Builder, including
+its own final-output instructions. Then compute game changes from the final
+narration and call save_v2_turn. Technical integrity checks remain mandatory.
+If true, use the retained strict preflight procedure below.
+
+STRICT PREFLIGHT — ONLY WHEN scene_review_enabled=true:
 Draft the complete narration without publishing it. Compare that entire draft
 against EVERY line, requirement and prohibition of the fresh, last-read,
 authoritative Skin Builder. Do not substitute prior scenes, recent messages,
@@ -185,15 +194,15 @@ The server cannot verify artistic meaning; the model must make the review
 specific and faithful to the author's ENTIRE Skin Builder. Never rewrite the
 author's Skin Builder itself to satisfy the review.
 
-Before approval and commit, do NOT mutate any game documents, including NPC
+Before successful commit, do NOT mutate any game documents, including NPC
 cards, history, timeline, relationships, knowledge, hooks, arcs and world state.
-Review writes only a technical receipt. Derive all updates from the approved
+If enabled, review writes only a technical receipt. Derive all updates from the
 final narration. Commit using the ORIGINAL request_id, packet_id, chunk_hashes and reader_text.
 Publish narration ONLY after saved=true; return the confirmed saved narration.
 Identical retries must preserve the entire payload and must not create a turn.
 On timeout/5xx retry that exact operation at most twice. If save status is
 unknown, prepare with the SAME request_id to recover a committed result.
-If RULES_VERSION_CHANGED or SKIN_VERSION_CHANGED, reprepare with the same
+If RULES_VERSION_CHANGED, SKIN_VERSION_CHANGED or REVIEW_MODE_CHANGED, reprepare with the same
 request_id, reader_text and plan, then read the new ordered packet and use
 its fresh final Skin Builder. For other 4xx/validation errors read the exact code and correct the cause once; if it
 recurs, stop and explain it. Never loop prepare/read/rewrite. A near-duplicate

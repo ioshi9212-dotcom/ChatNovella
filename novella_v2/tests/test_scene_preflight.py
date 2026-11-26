@@ -56,7 +56,7 @@ class TestSceneReview(unittest.TestCase):
         (self.instructions / "rules.md").write_text("Rules", encoding="utf-8")
         self.builder = self.instructions / "skin_builder.md"
         self.builder.write_text(self.skin, encoding="utf-8")
-        self.engine = Engine(base / "sessions", self.instructions)
+        self.engine = Engine(base / "sessions", self.instructions, scene_review_enabled=True)
         original = "Мир. Эдриан знаком с Ринатой."
         split = original.index("Эдриан")
         result = self.engine.create(original, [

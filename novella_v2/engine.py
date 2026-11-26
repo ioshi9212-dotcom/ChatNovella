@@ -378,10 +378,17 @@ def _speech_knowledge_flags(novel: str, scene: str, relationships: dict) -> list
 
 
 class Engine:
-    def __init__(self, root: str | Path, instructions: str | Path | None = None):
+    def __init__(self, root: str | Path, instructions: str | Path | None = None,
+                 *, scene_review_enabled: bool | None = None):
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
         self.instructions = Path(instructions or Path(__file__).parent)
+        if scene_review_enabled is None:
+            value = os.getenv("CHATNOVELLA_V2_SCENE_REVIEW", "0").strip().lower()
+            if value not in {"0", "1", "false", "true", "off", "on"}:
+                raise ValueError("CHATNOVELLA_V2_SCENE_REVIEW must be 0 or 1")
+            scene_review_enabled = value in {"1", "true", "on"}
+        self.scene_review_enabled = scene_review_enabled
 
     def _dir(self, sid: str) -> Path:
         need(bool(SESSION.fullmatch(sid)), "INVALID_SESSION", "Invalid session id")
@@ -403,14 +410,16 @@ class Engine:
         rules = self._read(self.instructions, "rules.md")
         if rules_only:
             return {"rules": {"content": rules, "sha256": digest(rules), "chars": len(rules)},
-                    "refresh_policy": "rules_first_skin_last_per_turn"}
+                    "refresh_policy": "rules_first_skin_last_per_turn",
+                    "scene_review_enabled": self.scene_review_enabled}
         skin = self._read(self.instructions, "skin_builder.md")
         return {
             "rules": {"content": rules, "sha256": digest(rules),
                       "chars": len(rules)},
             "skin_builder": {"content": skin, "sha256": digest(skin),
                              "chars": len(skin), "empty": not bool(skin.strip())},
-            "refresh_policy": "manual_per_chat",
+            "refresh_policy": "rules_first_skin_last_per_turn",
+            "scene_review_enabled": self.scene_review_enabled,
         }
 
     def instruction_versions(self) -> dict:
@@ -420,6 +429,7 @@ class Engine:
             "rules_sha256": data["rules"]["sha256"],
             "skin_builder_sha256": data["skin_builder"]["sha256"],
             "skin_builder_empty": data["skin_builder"]["empty"],
+            "scene_review_enabled": self.scene_review_enabled,
         }
 
     @staticmethod
@@ -683,7 +693,7 @@ class Engine:
                 "established_text": established_text}], self._cast(path))[name]
             return {"name": name, "version": meta["version"], "added": False,
                     "proposal": proposal,
-                    "instruction": "Pass proposal in prepare.new_characters. Only final reviewed commit registers NPC."}
+                    "instruction": "Pass proposal in prepare.new_characters. Only final successful commit registers NPC."}
 
     @staticmethod
     def _active(path: Path) -> list[dict]:
@@ -736,6 +746,7 @@ class Engine:
                  "skin_chunk_start": packet.get("skin_chunk_start"),
                  "rules_sha256": packet.get("rules_sha256"),
                  "skin_sha256": packet.get("skin_sha256"),
+                 "scene_review_enabled": packet.get("scene_review_enabled", False),
                 "reused_pending_packet": reused,
                 "unread_chunk_indices": unread,
                 "next_chunk_index": unread[0] if unread else None,
@@ -1027,6 +1038,7 @@ class Engine:
                  pending.get("instructions_mode") == "rules_first_skin_last_per_turn" and
                  pending.get("rules_sha256") == rules_sha and
                  pending.get("skin_sha256") == skin_sha and
+                 pending.get("scene_review_enabled") == self.scene_review_enabled and
                 pending.get("packet_stamp") == self._packet_stamp(path)):
                 return self._manifest(pending, meta["audit_due"], reused=True)
             if kind == "canon":
@@ -1141,8 +1153,10 @@ class Engine:
                 prefix = payload[:-1]
                 final_section = ',"skin_builder":' + json.dumps({
                     "sha256": skin_sha, "chars": len(skin), "empty": not bool(skin.strip()),
-                    "review_sections": scene_preflight.review_sections(skin),
-                    "review_rule_ids": [x["id"] for x in scene_preflight.review_items(skin)],
+                    "scene_review_enabled": self.scene_review_enabled,
+                    **({"review_sections": scene_preflight.review_sections(skin),
+                        "review_rule_ids": [x["id"] for x in scene_preflight.review_items(skin)]}
+                       if self.scene_review_enabled else {}),
                     "content": skin,
                 }, ensure_ascii=False, separators=(",", ":")) + "}"
                 content_chunks = chunks(prefix)
@@ -1167,6 +1181,7 @@ class Engine:
                       "instructions_mode": "rules_first_skin_last_per_turn",
                       "rules_sha256": rules_sha, "skin_sha256": skin_sha,
                       "skin_chunk_start": skin_chunk_start,
+                      "scene_review_enabled": self.scene_review_enabled,
                       "hashes": [digest(c) for c in content_chunks], "received": [],
                       "offsets": offsets, "sha256": digest(payload)}
             atomic(path / "system/packet.json", payload)
@@ -1234,10 +1249,11 @@ class Engine:
             raise EngineError("RELATION_INVALID", str(exc), 422) from exc
 
     def scene_review_manifest(self) -> dict:
-        """Read all authored rule lines once per chat or after manual refresh."""
+        """Inspect the retained optional reviewer; do not invoke during disabled turns."""
         skin = self._read(self.instructions, "skin_builder.md")
         return {
             "skin_sha256": digest(skin),
+            "scene_review_enabled": self.scene_review_enabled,
             "sections": scene_preflight.review_sections(skin),
             "rules": scene_preflight.review_items(skin),
         }
@@ -1258,6 +1274,12 @@ class Engine:
             need(packet is not None and packet.get("id") == packet_id,
                  "PACKET_EXPIRED", "Review only the current prepared packet")
             self._receipt(meta, packet_id, packet["hashes"], "turn")
+            need(packet.get("scene_review_enabled") == self.scene_review_enabled,
+                 "REVIEW_MODE_CHANGED", "Prepare fresh context for the current review mode")
+            if not self.scene_review_enabled:
+                return {"scene_review_enabled": False, "skipped": True,
+                        "approved": False, "issues": [],
+                        "instruction": "Formal literary review is disabled. Save final narration directly."}
             need(packet.get("request_id") in (None, request_id),
                  "REQUEST_ID_MISMATCH", "Review request must match prepared request")
             need(isinstance(narration, str) and 0 < len(narration) <= 120_000,
@@ -1340,7 +1362,10 @@ class Engine:
                  "Refresh the active Skin Builder: prepare and read the fresh packet")
             need(digest(self._read(self.instructions, "rules.md")) == packet.get("rules_sha256"),
                  "RULES_VERSION_CHANGED", "Rules changed; prepare and read the fresh packet")
-            if scene_preflight.is_formatted_builder(skin) or packet.get("new_characters"):
+            need(packet.get("scene_review_enabled") == self.scene_review_enabled,
+                 "REVIEW_MODE_CHANGED", "Prepare fresh context for the current review mode")
+            if self.scene_review_enabled and (scene_preflight.is_formatted_builder(skin)
+                                               or packet.get("new_characters")):
                 receipt = meta.get("scene_review") or {}
                 need(receipt.get("request_id") == req
                      and receipt.get("packet_id") == data["packet_id"]
@@ -1360,7 +1385,7 @@ class Engine:
                  "Load any entering character before writing")
             need(isinstance(data["narration"], str) and bool(data["narration"].strip())
                  and len(data["narration"]) <= 120_000, "SCENE_TEXT", "Invalid full scene")
-            # Persist only proposals actually used in the approved final scene.
+            # Persist only proposals actually used in the final saved scene.
             new_npcs = {name: dict(row) for name, row in proposals.items() if name in used}
             final_evidence = data.get("new_character_evidence", {})
             need(isinstance(final_evidence, dict) and set(final_evidence) <= set(new_npcs)

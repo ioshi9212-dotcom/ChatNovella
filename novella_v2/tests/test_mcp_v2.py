@@ -213,6 +213,7 @@ class TestV2MCP(unittest.TestCase):
         self.assertNotIn("content", json.dumps(versions))
 
     def test_review_tool_returns_full_builder_failures_before_save(self):
+        self.engine.scene_review_enabled = True
         sid = self.start()
         p = self.tool("prepare_v2_context", session_id=sid,
                       reader_text="Оглядываюсь", participants=["adrian"],
@@ -311,8 +312,6 @@ class TestV2MCP(unittest.TestCase):
             if number == 1:
                 narration += " Маркус вошёл и назвался."
                 state["present"]["marcus"] = empty_actor()
-                self.assertTrue(self.engine.review_scene(sid, packet["version"], packet["packet_id"],
-                    "audit-seed-1", packet["skin_sha256"], narration, [], [])["approved"])
             self.engine.commit(sid, {
                 "request_id": f"audit-seed-{number}", "expected_version": packet["version"],
                 "packet_id": packet["packet_id"], "chunk_hashes": packet["chunk_hashes"],

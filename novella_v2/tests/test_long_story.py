@@ -133,16 +133,6 @@ class TestLongStory(unittest.TestCase):
                     "state": game_state(n), "knowledge": entries,
                     "events": events, "relations": relations,
                 }
-                if proposals:
-                    from novella_v2.scene_preflight import review_sections, review_items
-                    skin = (instr / "skin_builder.md").read_text(encoding="utf-8")
-                    checked = engine.review_scene(sid, prep["version"], prep["packet_id"],
-                        request_id, prep["skin_sha256"], scene,
-                        [{"section": x, "result": "pass", "note": "Synthetic fixture reviewed."}
-                         for x in review_sections(skin)],
-                        [{"id": x["id"], "result": "pass", "note": "Synthetic fixture verified.",
-                          "evidence": proposals[0]["established_text"]} for x in review_items(skin)])
-                    self.assertTrue(checked["approved"], checked)
                 saved = engine.commit(sid, payload)
                 self.assertTrue(saved["saved"])
                 self.assertEqual(saved["turn"], n)
