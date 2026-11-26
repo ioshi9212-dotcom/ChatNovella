@@ -94,6 +94,19 @@ class TestV2MCP(unittest.TestCase):
                               "status": "not_started", "note": "Ключ ещё не найден",
                               "source": "Пропал ключ от шкафа."}])
 
+    def test_malformed_legacy_story_memory_does_not_reject_creation(self):
+        original = "Мир: тест.\n"
+        created = self.tool("create_v2_novel", original=original,
+                            blocks=[{"anchor": "Мир:", "target": "novel"}],
+                            names={}, initial_threads="bad",
+                            initial_hooks=[{"id": "incomplete"}])
+        sid = created["session_id"]
+        self.assertEqual({w["field"] for w in created["story_memory_warnings"]},
+                         {"initial_threads", "initial_hooks"})
+        self.assertEqual((self.data / sid / "original.txt").read_text(
+            encoding="utf-8"), original)
+        self.assertFalse(created["approved"])
+
     def read(self, sid, packet):
         parts = []
         for index in packet["unread_chunk_indices"]:
