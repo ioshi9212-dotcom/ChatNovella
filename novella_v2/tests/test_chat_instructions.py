@@ -60,7 +60,8 @@ class TestChatInstructions(unittest.TestCase):
 
     def test_initial_chat_read_returns_both_complete_texts(self):
         data = self.engine.load_instructions()
-        self.assertEqual(data["refresh_policy"], "manual_per_chat")
+        self.assertEqual(data["refresh_policy"], "rules_first_skin_last_per_turn")
+        self.assertFalse(data["scene_review_enabled"])
         self.assertEqual(data["rules"]["content"], "Механика: исходные правила.\n")
         self.assertEqual(data["skin_builder"]["content"], "")
         self.assertEqual(data["skin_builder"]["chars"], 0)
@@ -83,7 +84,8 @@ class TestChatInstructions(unittest.TestCase):
     def test_versions_returns_only_hashes_never_full_instructions(self):
         meta = self.engine.instruction_versions()
         self.assertEqual(set(meta),
-                         {"rules_sha256", "skin_builder_sha256", "skin_builder_empty"})
+                         {"rules_sha256", "skin_builder_sha256", "skin_builder_empty", "scene_review_enabled"})
+        self.assertFalse(meta["scene_review_enabled"])
         self.assertTrue(meta["skin_builder_empty"])
         self.assertEqual(meta["rules_sha256"],
                          sha256(self.rules.read_bytes()).hexdigest())
