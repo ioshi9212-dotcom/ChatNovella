@@ -96,6 +96,19 @@ def atomic(path: Path, content: str) -> None:
             os.unlink(name)
 
 
+def remove_character_file(path: Path, name: str) -> None:
+    need(bool(re.fullmatch(r"(?:characters|knowledge)/[a-z][a-z0-9_]{1,49}\.md", name))
+         and not name.endswith("/pov.md"), "DELETE_PATH", "Only new NPC files can be removed")
+    target = path / name
+    target.unlink(missing_ok=True)
+    if target.parent.exists():
+        directory = os.open(str(target.parent), os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+
+
 def safe_rel(name: str) -> bool:
     return (name in {"state.md", "relationships.md", "timeline.md", "history.jsonl",
                      "system/audit.jsonl", "novel.md", "open_threads.md", "hooks.md"}
@@ -420,6 +433,8 @@ class Engine:
             for name, encoded in pending["files"].items():
                 need(safe_rel(name), "RECOVERY_PATH", "Invalid pending file")
                 atomic(path / name, base64.b64decode(encoded).decode("utf-8"))
+            for name in pending.get("deletes", []):
+                remove_character_file(path, name)
             for name, entry in pending.get("appends", {}).items():
                 need(name == "history.jsonl", "RECOVERY_PATH",
                      "Only the scene archive supports pending appends")
@@ -448,8 +463,14 @@ class Engine:
 
     @staticmethod
     def _write(path: Path, meta: dict, files: dict[str, str], new: dict,
-               appends: dict[str, str] | None = None) -> None:
+               appends: dict[str, str] | None = None,
+               deletes: list[str] | None = None) -> None:
         appends = appends or {}
+        deletes = deletes or []
+        need(len(deletes) == len(set(deletes)) and all(
+            bool(re.fullmatch(r"(?:characters|knowledge)/[a-z][a-z0-9_]{1,49}\.md", n))
+            and not n.endswith("/pov.md") and n not in files and n not in appends
+            for n in deletes), "DELETE_PATH", "Invalid new NPC rollback files")
         for name in files:
             need(safe_rel(name) and name not in appends, "PATH_NOT_ALLOWED",
                  "Write outside session documents or conflicting write modes")
@@ -459,10 +480,12 @@ class Engine:
                         for k, value in appends.items()}
         pending = {"files": {k: base64.b64encode(v.encode("utf-8")).decode("ascii")
                              for k, v in files.items()},
-                   "appends": append_specs, "next": new}
+                   "appends": append_specs, "deletes": deletes, "next": new}
         atomic(path / "system/meta.json", dump({**meta, "pending": pending}))
         for name, content in files.items():
             atomic(path / name, content)
+        for name in deletes:
+            remove_character_file(path, name)
         for name, descriptor in append_specs.items():
             _apply_append(path / name, descriptor)
         atomic(path / "system/meta.json", dump(new))
@@ -615,41 +638,52 @@ class Engine:
             self._write(path, meta, files, new)
             return {"version": new["version"], "opening_saved": True}
 
+    @staticmethod
+    def _character_proposals(items: list[dict] | None, cast: set[str]) -> dict[str, dict]:
+        items = [] if items is None else items
+        need(isinstance(items, list) and len(items) <= 32, "CHARACTER_PROPOSALS",
+             "Supply at most 32 new NPC proposals per turn")
+        proposals = {}
+        for row in items:
+            need(isinstance(row, dict) and set(row) ==
+                 {"name", "display", "established_text"}, "CHARACTER_PROPOSALS",
+                 "Proposal needs name/display/established_text")
+            name = slug(row["name"])
+            display, source = row["display"], row["established_text"]
+            need(name not in cast and name not in proposals, "CHARACTER_EXISTS",
+                 "New character ID must be unique and not already registered")
+            need(isinstance(display, str) and 0 < len(display.strip()) <= 120
+                 and "\n" not in display and "\r" not in display
+                 and isinstance(source, str) and 8 <= len(source.strip()) <= 4000,
+                 "CHARACTER_REQUIRED", "New NPC needs a short name and literal final scene excerpt")
+            proposals[name] = {"name": name, "display": display.strip(),
+                               "established_text": source}
+        return proposals
+
+    @staticmethod
+    def _with_new_cast(novel: str, proposals: dict[str, dict]) -> str:
+        if not proposals:
+            return novel
+        heading = "## Персонажи (постоянные имена файлов)\n"
+        pos = novel.find(heading)
+        need(pos >= 0, "CAST_HEADING", "Main novel must contain the cast list")
+        boundary = novel.find("\n## ", pos + len(heading))
+        insert_at = len(novel) if boundary < 0 else boundary
+        additions = "".join("- " + name + " — " + row["display"] + "\n"
+                            for name, row in sorted(proposals.items()))
+        return novel[:insert_at].rstrip("\n") + "\n" + additions + novel[insert_at:]
+
     def add_character(self, sid: str, expected_version: int, name: str,
                       display: str, established_text: str) -> dict:
-        name = slug(name)
-        need(isinstance(display, str) and display.strip() and isinstance(established_text, str)
-             and established_text.strip(), "CHARACTER_REQUIRED", "Character must have a name and observed source")
+        """Validate a proposal, never create persistent NPC files."""
         with self._locked(sid) as (path, meta):
             self._version(meta, expected_version)
             need(meta["approved"], "NOT_APPROVED", "Approve novel before play")
-            need(name not in self._cast(path), "CHARACTER_EXISTS", "This character already exists")
-            novel = self._read(path, "novel.md")
-            heading = "## Персонажи (постоянные имена файлов)\n"
-            pos = novel.find(heading)
-            need(pos >= 0, "CAST_HEADING", "Main novel must contain the cast list")
-            boundary = novel.find("\n## ", pos + len(heading))
-            insert_at = len(novel) if boundary < 0 else boundary
-            novel = (novel[:insert_at].rstrip("\n") + "\n- " + name + " — " +
-                     display.strip() + "\n" + novel[insert_at:])
-            original_relationships = self._read(path, "relationships.md")
-            if meta.get("relationship_file_hash"):
-                need(digest(original_relationships) == meta["relationship_file_hash"],
-                     "RELATION_FILE_CHANGED", "Relations changed outside the engine")
-            old_rel = validate_relations(
-                json.loads(original_relationships), self._cast(path))
-            new_rel = validate_relations(old_rel, self._cast(path) | {name})
-            files = {"novel.md": novel, "characters/" + name + ".md":
-                     CHARACTER_RULE + established_text,
-                     "knowledge/" + name + ".md": "# Новые знания: " + name + "\n",
-                     "relationships.md": dump(new_rel)}
-            new = {**meta, "version": meta["version"] + 1, "packet": None,
-                   "relationship_file_hash": digest(files["relationships.md"]),
-                   "novel_hash": digest(novel),
-                   "card_hashes": {**meta.get("card_hashes", {}),
-                                   name: digest(files["characters/" + name + ".md"])}}
-            self._write(path, meta, files, new)
-            return {"name": name, "version": new["version"], "added": True}
+            proposal = self._character_proposals([{"name": name, "display": display,
+                "established_text": established_text}], self._cast(path))[name]
+            return {"name": name, "version": meta["version"], "added": False,
+                    "proposal": proposal,
+                    "instruction": "Pass proposal in prepare.new_characters. Only final reviewed commit registers NPC."}
 
     @staticmethod
     def _active(path: Path) -> list[dict]:
