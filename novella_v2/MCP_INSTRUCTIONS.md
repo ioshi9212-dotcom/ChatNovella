@@ -205,7 +205,11 @@ author's Skin Builder itself to satisfy the review.
 Before successful commit, do NOT mutate any game documents, including NPC
 cards, history, timeline, relationships, knowledge, hooks, arcs and world state.
 If enabled, review writes only a technical receipt. Derive all updates from the
-final narration. Commit using the ORIGINAL request_id, packet_id, chunk_hashes and reader_text.
+final narration. For knowledge, fact is one short line (1–350 characters);
+source is a literal excerpt of 3–400 characters and may span lines. Preserve
+its exact line breaks; the server encodes them in memory and retains the
+original in history. Never rewrite narration just to fit the evidence format.
+Commit using the ORIGINAL request_id, packet_id, chunk_hashes and reader_text.
 Publish narration ONLY after saved=true; return the confirmed saved narration.
 Identical retries must preserve the entire payload and must not create a turn.
 On timeout/5xx retry that exact operation at most twice. If save status is
