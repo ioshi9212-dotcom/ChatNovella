@@ -894,17 +894,19 @@ class Engine:
                      "hook_file_hash": digest(updated)}
             if meta.get("last_undo"):
                 undo = deepcopy(meta["last_undo"])
+                prior_cast = self._cast(path) - {Path(n).stem for n in
+                    undo.get("created_files", []) if n.startswith("characters/")}
                 prior = undo["before"].get("hooks.md", old)
                 undo["before"]["hooks.md"] = story_hooks.backfill(
                     prior, additions, original,
                     {row["turn"]: row["narration"] for row in active
-                     if row["turn"] < last}, last - 1, self._cast(path))
+                     if row["turn"] < last}, last - 1, prior_cast)
                 undo["before"]["open_threads.md"] = open_threads.backfill(
                     undo["before"].get("open_threads.md", arcs_before),
                     arc_repairs, original,
                     {row["turn"]: row["narration"] for row in active if row["turn"] < last},
                     last - 1)
-                story_hooks.validate_links(story_hooks.parse(undo["before"]["hooks.md"]),
+                story_hooks.validate_links(story_hooks.parse(undo["before"]["hooks.md"], prior_cast),
                                            open_threads.parse(undo["before"]["open_threads.md"]))
                 newer["last_undo"] = undo
             by_turn = {row["turn"]: row for row in active}
@@ -1325,8 +1327,8 @@ class Engine:
                  packet["request_id"] == req, "REQUEST_ID_MISMATCH",
                  "Prepared request ID and committed request ID differ")
             need(packet.get("source_signature") ==
-                 self._source_signature(path, set(packet["participants"]),
-                                        "turn"),
+                 self._source_signature(path, set(packet["participants"]) -
+                                         set(packet.get("new_characters", {})), "turn"),
                  "SOURCE_CHANGED", "A file changed after preparing the context")
             need(packet["reader_text"] == data["reader_text"],
                  "INPUT_MISMATCH", "Prepared and committed reader text differ")
@@ -1337,7 +1339,7 @@ class Engine:
                  "Refresh the active Skin Builder: prepare and read the fresh packet")
             need(digest(self._read(self.instructions, "rules.md")) == packet.get("rules_sha256"),
                  "RULES_VERSION_CHANGED", "Rules changed; prepare and read the fresh packet")
-            if scene_preflight.is_formatted_builder(skin):
+            if scene_preflight.is_formatted_builder(skin) or packet.get("new_characters"):
                 receipt = meta.get("scene_review") or {}
                 need(receipt.get("request_id") == req
                      and receipt.get("packet_id") == data["packet_id"]
@@ -1348,18 +1350,25 @@ class Engine:
                      "Review the exact final scene against every current Skin Builder "
                      "section before saving")
 
-            cast = self._cast(path)
+            registered_cast = self._cast(path)
+            proposals = self._character_proposals(
+                list(packet.get("new_characters", {}).values()), registered_cast)
             used = data["participants"]
             need(isinstance(used, list) and len(used) == len(set(used)) and
                  set(used) <= set(packet["participants"]), "UNLOADED_CHARACTER",
                  "Load any entering character before writing")
             need(isinstance(data["narration"], str) and bool(data["narration"].strip())
                  and len(data["narration"]) <= 120_000, "SCENE_TEXT", "Invalid full scene")
+            # Persist only proposals actually used in the approved final scene.
+            new_npcs = {name: row for name, row in proposals.items() if name in used}
+            need(all(row["established_text"] in data["narration"] for row in new_npcs.values()),
+                 "CHARACTER_SOURCE", "New NPC card requires an exact excerpt from the final approved scene")
+            cast = registered_cast | set(new_npcs)
             state = validate_state(data["state"], cast, meta["turn"] + 1)
             need((set(state["present"]) | set(state["remote"])) <= set(used),
                  "STATE_UNLOADED", "All present/remote characters must be loaded")
             before_state = json.loads(self._read(path, "state.md"))
-            validate_state(before_state, cast, meta["turn"])
+            validate_state(before_state, registered_cast, meta["turn"])
             # A loaded card or presence in an earlier scene is NOT proof
             # of witnessing this one: the new turn may jump in time/place.
             # Anyone who left by the final state needs a literal witness
@@ -1445,6 +1454,20 @@ class Engine:
                       "relationships.md": before_rel, "timeline.md": before_timeline,
                       "open_threads.md": before_threads,
                       "hooks.md": before_hooks}
+            created_files = []
+            if new_npcs:
+                old_novel = self._read(path, "novel.md")
+                need(not meta.get("novel_hash") or digest(old_novel) == meta["novel_hash"],
+                     "CANON_CHANGED", "Main questionnaire changed outside the engine")
+                before["novel.md"] = old_novel
+                files["novel.md"] = self._with_new_cast(old_novel, new_npcs)
+                for name, row in new_npcs.items():
+                    card, memory = "characters/" + name + ".md", "knowledge/" + name + ".md"
+                    need(not (path / card).exists() and not (path / memory).exists(),
+                         "CHARACTER_EXISTS", "New NPC files already exist")
+                    files[card] = CHARACTER_RULE + row["established_text"]
+                    files[memory] = "# Новые знания: " + name + "\n"
+                    created_files.extend([card, memory])
             need(isinstance(data["knowledge"], list), "KNOWLEDGE_TYPE",
                  "Knowledge entries must be a list")
             knowledge_rows: list[dict] = []
@@ -1497,7 +1520,7 @@ class Engine:
             warnings = (["SCENE_NEAR_DUPLICATE"]
                         if _near_duplicate(data["narration"], older_scenes) else [])
             warnings.extend(_speech_knowledge_flags(
-                self._read(path, "novel.md"), data["narration"],
+                files.get("novel.md", self._read(path, "novel.md")), data["narration"],
                 json.loads(after_rel)))
             record = {"kind": "turn", "turn": meta["turn"] + 1, "request_id": req,
                       "reader_text": data["reader_text"], "narration": data["narration"],
@@ -1506,6 +1529,7 @@ class Engine:
                       "events": data["events"], "relations": data["relations"],
                       "thread_updates": thread_changes,
                       "hook_updates": hook_changes,
+                      "new_characters": list(new_npcs.values()),
                       "story_plan": packet.get("story_plan"),
                       "warnings": warnings}
             due = 60 if (meta["turn"] + 1) % 60 == 0 else \
@@ -1521,8 +1545,13 @@ class Engine:
                         hook_file_hash=digest(after_hooks),
                        audit_due=due, packet=None,
                        last_undo={"request_id": req, "before": before,
+                                  "created_files": created_files,
                                   "prior_turn": meta["turn"],
                                   "prior_audit_due": meta["audit_due"]})
+            if new_npcs:
+                new["novel_hash"] = digest(files["novel.md"])
+                new["card_hashes"] = {**meta.get("card_hashes", {}), **{
+                    name: digest(files["characters/" + name + ".md"]) for name in new_npcs}}
             # Director receipt belongs to the previous version; avoid retaining
             # large unused planning indexes in session metadata.
             for key in tuple(new):
@@ -1550,6 +1579,7 @@ class Engine:
                  isinstance(reason, str) and reason.strip(), "ROLLBACK_LAST_ONLY",
                  "Rollback requires exact last turn request id and reason")
             files = deepcopy(undo["before"])
+            created_files = undo.get("created_files", [])
             marker = dump({"kind": "rollback", "reverts": request_id,
                            "reason": reason, "turn": meta["turn"]}) + "\n"
             new = deepcopy(meta)
@@ -1566,9 +1596,15 @@ class Engine:
                                      if turn <= undo["prior_turn"]}
             else:
                 new.pop("first_seen", None)  # legacy undo; rebuild from active archive
+            if created_files:
+                new["novel_hash"] = digest(files["novel.md"])
+                new["card_hashes"] = {name: checksum for name, checksum in
+                    meta.get("card_hashes", {}).items()
+                    if "characters/" + name + ".md" not in created_files}
+            new["scene_review"] = None
             new["requests"][request_id]["reverted"] = True
             self._write(path, meta, files, new,
-                        appends={"history.jsonl": marker})
+                        appends={"history.jsonl": marker}, deletes=created_files)
             return {"rolled_back": True, "turn": new["turn"],
                     "version": new["version"]}
 
