@@ -58,10 +58,8 @@ class TestLongStory(unittest.TestCase):
             all_knowledge = {"adrian": 0, "silas": 0, "marcus": 0}
             checks = 0
             for n in range(1, 121):
-                if n == 61:
-                    status = engine.status(sid)
-                    engine.add_character(sid, status["version"], "marcus", "Маркус",
-                                         "Маркус встретил компанию в кафе.")
+                proposals = [{"name": "marcus", "display": "Маркус",
+                              "established_text": "Маркус встретил компанию в кафе."}] if n == 61 else None
                 reader = "Ответ героини #" + str(n)
                 scene = ("**Адриан** — Сообщение " + str(n) +
                          ".\n**POV** — Поняла.\n")
@@ -72,8 +70,10 @@ class TestLongStory(unittest.TestCase):
                 if n >= 61:
                     people.append("marcus")
                     scene += "**Маркус** — Я здесь.\n"
+                if proposals:
+                    scene += proposals[0]["established_text"]
                 engine.director_brief(sid)
-                prep = engine.prepare(sid, reader, people)
+                prep = engine.prepare(sid, reader, people, new_characters=proposals)
                 parts = []
                 for j in range(prep["chunk_count"]):
                     parts.append(engine.read_chunk(sid, prep["packet_id"], j)["content"])

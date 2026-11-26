@@ -156,7 +156,7 @@ class TestV2MCP(unittest.TestCase):
         init = self.rpc("initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
                                       "clientInfo": {"name": "V2 acceptance", "version": "1.0"}})
         self.assertEqual(init["serverInfo"]["name"], "ChatNovella V2")
-        self.assertIn("once", init["instructions"])
+        self.assertIn("rules_only=true", init["instructions"])
         tools = self.rpc("tools/list")["tools"]
         self.assertEqual({t["name"] for t in tools}, TOOLS)
         turn = next(t for t in tools if t["name"] == "save_v2_turn")["inputSchema"]
@@ -201,6 +201,8 @@ class TestV2MCP(unittest.TestCase):
         self.assertIn("missing_key_hook", files["hooks.md"])
 
     def test_instructions_hashes_and_author_skin_unchanged(self):
+        bootstrap = self.tool("load_v2_instructions", rules_only=True)
+        self.assertNotIn("skin_builder", bootstrap)
         instructions = self.tool("load_v2_instructions")
         for name in ("rules", "skin_builder"):
             self.assertEqual(instructions[name]["sha256"], digest(instructions[name]["content"]))
@@ -210,7 +212,24 @@ class TestV2MCP(unittest.TestCase):
         self.assertEqual(versions["rules_sha256"], instructions["rules"]["sha256"])
         self.assertNotIn("content", json.dumps(versions))
 
+    def test_default_mcp_turn_skips_literary_review_with_real_builder(self):
+        sid = self.start()
+        p = self.tool("prepare_v2_context", session_id=sid,
+                      reader_text="Привет", participants=["adrian"],
+                      kind="turn", request_id="no-literary-review")
+        self.assertFalse(p["scene_review_enabled"])
+        self.read(sid, p)
+        turn = {"request_id": "no-literary-review", "expected_version": p["version"],
+                "packet_id": p["packet_id"], "chunk_hashes": p["chunk_hashes"],
+                "reader_text": "Привет", "narration": "Адриан поздоровался.",
+                "participants": ["adrian"], "state": self.state(1),
+                "knowledge": [], "events": [], "relations": []}
+        result = self.tool("save_v2_turn", session_id=sid, turn=turn)
+        self.assertTrue(result["saved"])
+        self.assertEqual(result["turn"], 1)
+
     def test_review_tool_returns_full_builder_failures_before_save(self):
+        self.engine.scene_review_enabled = True
         sid = self.start()
         p = self.tool("prepare_v2_context", session_id=sid,
                       reader_text="Оглядываюсь", participants=["adrian"],
@@ -293,18 +312,27 @@ class TestV2MCP(unittest.TestCase):
         status = self.engine.status(sid)
         added = self.tool("add_v2_character", session_id=sid, expected_version=status["version"],
                           name="marcus", display="Маркус", established_text="Маркус вошёл и назвался.")
-        self.assertGreater(added["version"], status["version"])
+        self.assertEqual(added["version"], status["version"])
+        self.assertFalse(added["added"])
+        self.assertFalse((self.data / sid / "characters/marcus.md").exists())
         for number in range(1, 16):
             brief = self.engine.director_brief(sid)
-            packet = self.engine.prepare(sid, str(number), ["adrian"], "turn", f"audit-seed-{number}",
-                                         story_plan=fixture_plan(brief))
+            people = ["adrian", "marcus"] if number == 1 else ["adrian"]
+            packet = self.engine.prepare(sid, str(number), people, "turn", f"audit-seed-{number}",
+                                         story_plan=fixture_plan(brief),
+                                         new_characters=[added["proposal"]] if number == 1 else None)
             for index in packet["unread_chunk_indices"]:
                 self.engine.read_chunk(sid, packet["packet_id"], index)
+            narration = f"Адриан перелистнул страницу {number}."
+            state = self.state(number)
+            if number == 1:
+                narration += " Маркус вошёл и назвался."
+                state["present"]["marcus"] = empty_actor()
             self.engine.commit(sid, {
                 "request_id": f"audit-seed-{number}", "expected_version": packet["version"],
                 "packet_id": packet["packet_id"], "chunk_hashes": packet["chunk_hashes"],
-                "reader_text": str(number), "narration": f"Адриан перелистнул страницу {number}.",
-                "participants": ["adrian"], "state": self.state(number),
+                "reader_text": str(number), "narration": narration,
+                "participants": people, "state": state,
                 "knowledge": [], "events": [], "relations": [],
             })
         blocked = self.rpc("tools/call", {"name": "prepare_v2_context", "arguments": {

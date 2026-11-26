@@ -106,7 +106,11 @@ class TestV2Http(unittest.TestCase):
     def test_http_full_flow_with_memory_timeline_relations_and_rollback(self):
         sid = self.start_novel()
         p, content = self.prepared(sid)
-        self.assertNotIn("Только Skin Builder", content)
+        import json
+        payload = json.loads(content)
+        self.assertEqual(list(payload)[:2], ["rules", "recent_scenes"])
+        self.assertEqual(list(payload)[-1], "skin_builder")
+        self.assertEqual(payload["skin_builder"]["content"], "Только Skin Builder")
         self.assertNotIn("engine/skin_builder.md", content)
         self.assertNotIn("engine/rules.md", content)
         scene = "**Адриан** — Встречаемся завтра."

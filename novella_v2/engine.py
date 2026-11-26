@@ -96,6 +96,19 @@ def atomic(path: Path, content: str) -> None:
             os.unlink(name)
 
 
+def remove_character_file(path: Path, name: str) -> None:
+    need(bool(re.fullmatch(r"(?:characters|knowledge)/[a-z][a-z0-9_]{1,49}\.md", name))
+         and not name.endswith("/pov.md"), "DELETE_PATH", "Only new NPC files can be removed")
+    target = path / name
+    target.unlink(missing_ok=True)
+    if target.parent.exists():
+        directory = os.open(str(target.parent), os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+
+
 def safe_rel(name: str) -> bool:
     return (name in {"state.md", "relationships.md", "timeline.md", "history.jsonl",
                      "system/audit.jsonl", "novel.md", "open_threads.md", "hooks.md"}
@@ -365,10 +378,17 @@ def _speech_knowledge_flags(novel: str, scene: str, relationships: dict) -> list
 
 
 class Engine:
-    def __init__(self, root: str | Path, instructions: str | Path | None = None):
+    def __init__(self, root: str | Path, instructions: str | Path | None = None,
+                 *, scene_review_enabled: bool | None = None):
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
         self.instructions = Path(instructions or Path(__file__).parent)
+        if scene_review_enabled is None:
+            value = os.getenv("CHATNOVELLA_V2_SCENE_REVIEW", "0").strip().lower()
+            if value not in {"0", "1", "false", "true", "off", "on"}:
+                raise ValueError("CHATNOVELLA_V2_SCENE_REVIEW must be 0 or 1")
+            scene_review_enabled = value in {"1", "true", "on"}
+        self.scene_review_enabled = scene_review_enabled
 
     def _dir(self, sid: str) -> Path:
         need(bool(SESSION.fullmatch(sid)), "INVALID_SESSION", "Invalid session id")
@@ -381,29 +401,35 @@ class Engine:
         # read_text() normalizes CRLF: original author bytes must remain literal.
         return (path / name).read_bytes().decode("utf-8")
 
-    def load_instructions(self) -> dict:
-        """Full instruction text: fetch once per conversation or on explicit refresh.
+    def load_instructions(self, rules_only: bool = False) -> dict:
+        """Full instruction texts for explicit inspection, or rules-only bootstrap.
 
         This does not persist ChatGPT's chat memory. The client retains the
         returned text in its current conversation context.
         """
         rules = self._read(self.instructions, "rules.md")
+        if rules_only:
+            return {"rules": {"content": rules, "sha256": digest(rules), "chars": len(rules)},
+                    "refresh_policy": "rules_first_skin_last_per_turn",
+                    "scene_review_enabled": self.scene_review_enabled}
         skin = self._read(self.instructions, "skin_builder.md")
         return {
             "rules": {"content": rules, "sha256": digest(rules),
                       "chars": len(rules)},
             "skin_builder": {"content": skin, "sha256": digest(skin),
                              "chars": len(skin), "empty": not bool(skin.strip())},
-            "refresh_policy": "manual_per_chat",
+            "refresh_policy": "rules_first_skin_last_per_turn",
+            "scene_review_enabled": self.scene_review_enabled,
         }
 
     def instruction_versions(self) -> dict:
-        """Small explicit version check; full texts are never read in a turn."""
+        """Small explicit version check; no instruction texts in the response."""
         data = self.load_instructions()
         return {
             "rules_sha256": data["rules"]["sha256"],
             "skin_builder_sha256": data["skin_builder"]["sha256"],
             "skin_builder_empty": data["skin_builder"]["empty"],
+            "scene_review_enabled": self.scene_review_enabled,
         }
 
     @staticmethod
@@ -417,6 +443,8 @@ class Engine:
             for name, encoded in pending["files"].items():
                 need(safe_rel(name), "RECOVERY_PATH", "Invalid pending file")
                 atomic(path / name, base64.b64decode(encoded).decode("utf-8"))
+            for name in pending.get("deletes", []):
+                remove_character_file(path, name)
             for name, entry in pending.get("appends", {}).items():
                 need(name == "history.jsonl", "RECOVERY_PATH",
                      "Only the scene archive supports pending appends")
@@ -445,8 +473,14 @@ class Engine:
 
     @staticmethod
     def _write(path: Path, meta: dict, files: dict[str, str], new: dict,
-               appends: dict[str, str] | None = None) -> None:
+               appends: dict[str, str] | None = None,
+               deletes: list[str] | None = None) -> None:
         appends = appends or {}
+        deletes = deletes or []
+        need(len(deletes) == len(set(deletes)) and all(
+            bool(re.fullmatch(r"(?:characters|knowledge)/[a-z][a-z0-9_]{1,49}\.md", n))
+            and not n.endswith("/pov.md") and n not in files and n not in appends
+            for n in deletes), "DELETE_PATH", "Invalid new NPC rollback files")
         for name in files:
             need(safe_rel(name) and name not in appends, "PATH_NOT_ALLOWED",
                  "Write outside session documents or conflicting write modes")
@@ -456,10 +490,12 @@ class Engine:
                         for k, value in appends.items()}
         pending = {"files": {k: base64.b64encode(v.encode("utf-8")).decode("ascii")
                              for k, v in files.items()},
-                   "appends": append_specs, "next": new}
+                   "appends": append_specs, "deletes": deletes, "next": new}
         atomic(path / "system/meta.json", dump({**meta, "pending": pending}))
         for name, content in files.items():
             atomic(path / name, content)
+        for name in deletes:
+            remove_character_file(path, name)
         for name, descriptor in append_specs.items():
             _apply_append(path / name, descriptor)
         atomic(path / "system/meta.json", dump(new))
@@ -612,41 +648,52 @@ class Engine:
             self._write(path, meta, files, new)
             return {"version": new["version"], "opening_saved": True}
 
+    @staticmethod
+    def _character_proposals(items: list[dict] | None, cast: set[str]) -> dict[str, dict]:
+        items = [] if items is None else items
+        need(isinstance(items, list) and len(items) <= 32, "CHARACTER_PROPOSALS",
+             "Supply at most 32 new NPC proposals per turn")
+        proposals = {}
+        for row in items:
+            need(isinstance(row, dict) and set(row) ==
+                 {"name", "display", "established_text"}, "CHARACTER_PROPOSALS",
+                 "Proposal needs name/display/established_text")
+            name = slug(row["name"])
+            display, source = row["display"], row["established_text"]
+            need(name not in cast and name not in proposals, "CHARACTER_EXISTS",
+                 "New character ID must be unique and not already registered")
+            need(isinstance(display, str) and 0 < len(display.strip()) <= 120
+                 and "\n" not in display and "\r" not in display
+                 and isinstance(source, str) and 8 <= len(source.strip()) <= 4000,
+                 "CHARACTER_REQUIRED", "New NPC needs a short name and literal final scene excerpt")
+            proposals[name] = {"name": name, "display": display.strip(),
+                               "established_text": source}
+        return proposals
+
+    @staticmethod
+    def _with_new_cast(novel: str, proposals: dict[str, dict]) -> str:
+        if not proposals:
+            return novel
+        heading = "## Персонажи (постоянные имена файлов)\n"
+        pos = novel.find(heading)
+        need(pos >= 0, "CAST_HEADING", "Main novel must contain the cast list")
+        boundary = novel.find("\n## ", pos + len(heading))
+        insert_at = len(novel) if boundary < 0 else boundary
+        additions = "".join("- " + name + " — " + row["display"] + "\n"
+                            for name, row in sorted(proposals.items()))
+        return novel[:insert_at].rstrip("\n") + "\n" + additions + novel[insert_at:]
+
     def add_character(self, sid: str, expected_version: int, name: str,
                       display: str, established_text: str) -> dict:
-        name = slug(name)
-        need(isinstance(display, str) and display.strip() and isinstance(established_text, str)
-             and established_text.strip(), "CHARACTER_REQUIRED", "Character must have a name and observed source")
+        """Validate a proposal, never create persistent NPC files."""
         with self._locked(sid) as (path, meta):
             self._version(meta, expected_version)
             need(meta["approved"], "NOT_APPROVED", "Approve novel before play")
-            need(name not in self._cast(path), "CHARACTER_EXISTS", "This character already exists")
-            novel = self._read(path, "novel.md")
-            heading = "## Персонажи (постоянные имена файлов)\n"
-            pos = novel.find(heading)
-            need(pos >= 0, "CAST_HEADING", "Main novel must contain the cast list")
-            boundary = novel.find("\n## ", pos + len(heading))
-            insert_at = len(novel) if boundary < 0 else boundary
-            novel = (novel[:insert_at].rstrip("\n") + "\n- " + name + " — " +
-                     display.strip() + "\n" + novel[insert_at:])
-            original_relationships = self._read(path, "relationships.md")
-            if meta.get("relationship_file_hash"):
-                need(digest(original_relationships) == meta["relationship_file_hash"],
-                     "RELATION_FILE_CHANGED", "Relations changed outside the engine")
-            old_rel = validate_relations(
-                json.loads(original_relationships), self._cast(path))
-            new_rel = validate_relations(old_rel, self._cast(path) | {name})
-            files = {"novel.md": novel, "characters/" + name + ".md":
-                     CHARACTER_RULE + established_text,
-                     "knowledge/" + name + ".md": "# Новые знания: " + name + "\n",
-                     "relationships.md": dump(new_rel)}
-            new = {**meta, "version": meta["version"] + 1, "packet": None,
-                   "relationship_file_hash": digest(files["relationships.md"]),
-                   "novel_hash": digest(novel),
-                   "card_hashes": {**meta.get("card_hashes", {}),
-                                   name: digest(files["characters/" + name + ".md"])}}
-            self._write(path, meta, files, new)
-            return {"name": name, "version": new["version"], "added": True}
+            proposal = self._character_proposals([{"name": name, "display": display,
+                "established_text": established_text}], self._cast(path))[name]
+            return {"name": name, "version": meta["version"], "added": False,
+                    "proposal": proposal,
+                    "instruction": "Pass proposal in prepare.new_characters. Only final successful commit registers NPC."}
 
     @staticmethod
     def _active(path: Path) -> list[dict]:
@@ -675,8 +722,7 @@ class Engine:
         names.append("knowledge/pov.md")
         if (path / "characters/pov.md").exists():
             names.append("characters/pov.md")
-        # Rules and Skin Builder belong to the chat-scoped instruction read,
-        # never to a gameplay packet. A remote edit must not force re-reading.
+        # Instruction snapshots have separate version hashes in the packet.
         sources = [path / name for name in names]
         return [[str(p), sha256(p.read_bytes()).hexdigest()] for p in sources]
 
@@ -696,6 +742,11 @@ class Engine:
                 "chunk_hashes": packet["hashes"], "sha256": packet["sha256"],
                 "participants": packet["participants"], "audit_due": audit_due,
                 "request_id": packet.get("request_id"),
+                 "instructions_mode": packet.get("instructions_mode"),
+                 "skin_chunk_start": packet.get("skin_chunk_start"),
+                 "rules_sha256": packet.get("rules_sha256"),
+                 "skin_sha256": packet.get("skin_sha256"),
+                 "scene_review_enabled": packet.get("scene_review_enabled", False),
                 "reused_pending_packet": reused,
                 "unread_chunk_indices": unread,
                 "next_chunk_index": unread[0] if unread else None,
@@ -854,17 +905,19 @@ class Engine:
                      "hook_file_hash": digest(updated)}
             if meta.get("last_undo"):
                 undo = deepcopy(meta["last_undo"])
+                prior_cast = self._cast(path) - {Path(n).stem for n in
+                    undo.get("created_files", []) if n.startswith("characters/")}
                 prior = undo["before"].get("hooks.md", old)
                 undo["before"]["hooks.md"] = story_hooks.backfill(
                     prior, additions, original,
                     {row["turn"]: row["narration"] for row in active
-                     if row["turn"] < last}, last - 1, self._cast(path))
+                     if row["turn"] < last}, last - 1, prior_cast)
                 undo["before"]["open_threads.md"] = open_threads.backfill(
                     undo["before"].get("open_threads.md", arcs_before),
                     arc_repairs, original,
                     {row["turn"]: row["narration"] for row in active if row["turn"] < last},
                     last - 1)
-                story_hooks.validate_links(story_hooks.parse(undo["before"]["hooks.md"]),
+                story_hooks.validate_links(story_hooks.parse(undo["before"]["hooks.md"], prior_cast),
                                            open_threads.parse(undo["before"]["open_threads.md"]))
                 newer["last_undo"] = undo
             by_turn = {row["turn"]: row for row in active}
@@ -896,7 +949,8 @@ class Engine:
     def prepare(self, sid: str, reader_text: str = "",
                 participants: list[str] | None = None, kind: str = "turn",
                 request_id: str | None = None,
-                story_plan: dict | None = None) -> dict:
+                story_plan: dict | None = None,
+                new_characters: list[dict] | None = None) -> dict:
         need(kind in ("turn", "audit", "canon"), "CONTEXT_KIND", "Unsupported context kind")
         need(isinstance(reader_text, str), "INPUT_TEXT", "Reader input must be text")
         need(request_id is None or (isinstance(request_id, str) and
@@ -934,6 +988,15 @@ class Engine:
                 validate_state(state, cast, meta["turn"])
                 need(state["location"] != "НЕ ЗАДАНА", "OPENING_MISSING",
                      "Set opening scene before playing")
+            pending = meta.get("packet")
+            if (kind == "turn" and new_characters is None and pending
+                    and pending.get("version") == meta["version"]
+                    and pending.get("request_id") == request_id
+                    and pending.get("reader_text") == reader_text):
+                new_characters = list(pending.get("new_characters", {}).values())
+            proposals = self._character_proposals(new_characters, cast)
+            need(kind == "turn" or not proposals, "CHARACTER_PROPOSALS",
+                 "New NPC proposals belong only to game turns")
             given = participants or []
             need(isinstance(given, list) and all(isinstance(p, str) for p in given)
                  and len(given) == len(set(given)), "PARTICIPANTS",
@@ -946,8 +1009,13 @@ class Engine:
                     relevant.update(row.get("participants", []))
                 if meta["audit_due"] == 60:
                     relevant = cast
-            need(relevant <= cast, "UNKNOWN_CHARACTER", "Character not registered in novel")
-            signature = self._source_signature(path, relevant, kind)
+            need(relevant <= cast | set(proposals), "UNKNOWN_CHARACTER", "Character not registered in novel or prepared as a proposal")
+            need(set(proposals) <= relevant, "CHARACTER_PROPOSALS", "New NPC proposals must be prepared participants")
+            signature = self._source_signature(path, relevant - set(proposals), kind)
+            rules = self._read(self.instructions, "rules.md")
+            skin = self._read(self.instructions, "skin_builder.md") if kind == "turn" else None
+            rules_sha = digest(rules)
+            skin_sha = digest(skin) if skin is not None else None
             pending = meta.get("packet")
             if kind == "turn":
                 if (story_plan is None and pending and pending.get("version") == meta["version"]
@@ -963,9 +1031,14 @@ class Engine:
                 pending["participants"] == sorted(relevant) and
                 pending.get("request_id") == request_id and
                  pending.get("story_plan") == story_plan and
+                 pending.get("new_characters", {}) == proposals and
                  (kind != "turn" or pending.get("director_version") == meta["version"]) and
                  (kind != "audit" or "audit_story_ids" in pending) and
                 pending.get("source_signature") == signature and
+                 pending.get("instructions_mode") == "rules_first_skin_last_per_turn" and
+                 pending.get("rules_sha256") == rules_sha and
+                 pending.get("skin_sha256") == skin_sha and
+                 pending.get("scene_review_enabled") == self.scene_review_enabled and
                 pending.get("packet_stamp") == self._packet_stamp(path)):
                 return self._manifest(pending, meta["audit_due"], reused=True)
             if kind == "canon":
@@ -1010,6 +1083,10 @@ class Engine:
                      "CANON_CHANGED", "Main questionnaire changed outside the engine")
             for name in sorted(relevant):
                 card_path = "characters/" + name + ".md"
+                if name in proposals:
+                    files[card_path] = CHARACTER_RULE + proposals[name]["established_text"]
+                    files["knowledge/" + name + ".md"] = "# Новые знания: " + name + "\n"
+                    continue
                 files[card_path] = self._read(path, card_path)
                 files["knowledge/" + name + ".md"] = self._read(path, "knowledge/" + name + ".md")
                 if name in meta.get("card_hashes", {}):
@@ -1045,10 +1122,16 @@ class Engine:
                 audit_ids = sorted({"hook:" + h["id"] for h in review_rows} |
                                    {"arc:" + a["id"] for a in arcs} |
                                    {w["id"] for w in audit_windows})
-            payload = dump({"kind": kind, "reader_text": reader_text,
-                            "audit_due": meta["audit_due"], "participants": sorted(relevant),
-                            "instructions_mode": "loaded_once_per_chat",
-                            "files": files, "recent_scenes": recent,
+            # Do not alphabetically sort this transport object: reading order matters.
+            ordered_recent = [{"turn": row["turn"], "reader_text": row["reader_text"],
+                               "narration": row["narration"], **row} for row in recent]
+            context = {"rules": {"sha256": rules_sha, "chars": len(rules), "content": rules},
+                       "recent_scenes": ordered_recent,
+                       "kind": kind, "reader_text": reader_text,
+                       "audit_due": meta["audit_due"], "participants": sorted(relevant),
+                       "instructions_mode": "rules_first_skin_last_per_turn",
+                       "files": files,
+                       "new_character_proposals": list(proposals.values()),
                             "story_plan": story_plan,
                             "resolved_outcomes": story_hooks.outcome_index(hook_rows)
                                 if kind == "turn" else [],
@@ -1062,8 +1145,26 @@ class Engine:
                                 "appearance_review_ids": plot_health["appearance_review"],
                                 "conditions_due_ids": plot_health["conditions_due"],
                                 "conditions_review_ids": plot_health["conditions_review"],
-                                "stale_hook_ids": plot_health["stale_hooks"]}})
-            content_chunks = chunks(payload)
+                                "stale_hook_ids": plot_health["stale_hooks"]}}
+            payload = json.dumps(context, ensure_ascii=False, separators=(",", ":"))
+            skin_chunk_start = None
+            if skin is not None:
+                # Start a dedicated final block; no world data follows artistic text.
+                prefix = payload[:-1]
+                final_section = ',"skin_builder":' + json.dumps({
+                    "sha256": skin_sha, "chars": len(skin), "empty": not bool(skin.strip()),
+                    "scene_review_enabled": self.scene_review_enabled,
+                    **({"review_sections": scene_preflight.review_sections(skin),
+                        "review_rule_ids": [x["id"] for x in scene_preflight.review_items(skin)]}
+                       if self.scene_review_enabled else {}),
+                    "content": skin,
+                }, ensure_ascii=False, separators=(",", ":")) + "}"
+                content_chunks = chunks(prefix)
+                skin_chunk_start = len(content_chunks)
+                content_chunks.extend(chunks(final_section))
+                payload = prefix + final_section
+            else:
+                content_chunks = chunks(payload)
             offsets = []
             position = 0
             for piece in content_chunks:
@@ -1076,6 +1177,11 @@ class Engine:
                       "request_id": request_id, "source_signature": signature,
                       "director_version": meta["version"] if kind == "turn" else None,
                       "story_plan": story_plan, "audit_story_ids": audit_ids,
+                      "new_characters": proposals,
+                      "instructions_mode": "rules_first_skin_last_per_turn",
+                      "rules_sha256": rules_sha, "skin_sha256": skin_sha,
+                      "skin_chunk_start": skin_chunk_start,
+                      "scene_review_enabled": self.scene_review_enabled,
                       "hashes": [digest(c) for c in content_chunks], "received": [],
                       "offsets": offsets, "sha256": digest(payload)}
             atomic(path / "system/packet.json", payload)
@@ -1091,6 +1197,14 @@ class Engine:
                  "Prepare fresh context only if this packet actually expired")
             need(type(index) is int and 0 <= index < len(packet["offsets"]),
                  "CHUNK_INDEX", "Invalid chunk index")
+            need(packet.get("instructions_mode") == "rules_first_skin_last_per_turn",
+                 "PACKET_EXPIRED", "Prepare fresh context in the new reading order")
+            unread_before = [i for i in range(len(packet["hashes"])) if i not in packet["received"]]
+            need(index in packet["received"] or (unread_before and index == unread_before[0]),
+                 "CHUNK_ORDER", "Read the next unread chunk in order; Skin Builder is last")
+            if index == packet.get("skin_chunk_start"):
+                need(digest(self._read(self.instructions, "skin_builder.md")) == packet["skin_sha256"],
+                     "SKIN_VERSION_CHANGED", "Skin Builder changed; prepare fresh context")
             offset, length = packet["offsets"][index]
             with (path / "system/packet.json").open("rb") as handle:
                 handle.seek(offset)
@@ -1105,6 +1219,8 @@ class Engine:
             unread = [i for i in range(len(packet["hashes"]))
                       if i not in packet["received"]]
             return {"index": index, "content": fragment,
+                     "phase": ("skin_builder" if packet.get("skin_chunk_start") is not None
+                               and index >= packet["skin_chunk_start"] else "context"),
                     "sha256": packet["hashes"][index],
                     "chunk_count": len(packet["hashes"]), "packet_id": packet_id,
                     "next_chunk_index": unread[0] if unread else None,
@@ -1117,6 +1233,8 @@ class Engine:
         need(p is not None and p["id"] == packet_id and
              p["version"] == meta["version"] and p["kind"] == kind,
              "PACKET_EXPIRED", "Use the current prepared context")
+        need(p.get("instructions_mode") == "rules_first_skin_last_per_turn",
+             "PACKET_EXPIRED", "Prepare fresh context in the new reading order")
         need(hashes == p["hashes"] and
              set(p["received"]) == set(range(len(p["hashes"]))),
              "PACKET_INCOMPLETE", "Read and verify all 36000-character chunks")
@@ -1131,10 +1249,11 @@ class Engine:
             raise EngineError("RELATION_INVALID", str(exc), 422) from exc
 
     def scene_review_manifest(self) -> dict:
-        """Read all authored rule lines once per chat or after manual refresh."""
+        """Inspect the retained optional reviewer; do not invoke during disabled turns."""
         skin = self._read(self.instructions, "skin_builder.md")
         return {
             "skin_sha256": digest(skin),
+            "scene_review_enabled": self.scene_review_enabled,
             "sections": scene_preflight.review_sections(skin),
             "rules": scene_preflight.review_items(skin),
         }
@@ -1155,14 +1274,22 @@ class Engine:
             need(packet is not None and packet.get("id") == packet_id,
                  "PACKET_EXPIRED", "Review only the current prepared packet")
             self._receipt(meta, packet_id, packet["hashes"], "turn")
+            need(packet.get("scene_review_enabled") == self.scene_review_enabled,
+                 "REVIEW_MODE_CHANGED", "Prepare fresh context for the current review mode")
+            if not self.scene_review_enabled:
+                return {"scene_review_enabled": False, "skipped": True,
+                        "approved": False, "issues": [],
+                        "instruction": "Formal literary review is disabled. Save final narration directly."}
             need(packet.get("request_id") in (None, request_id),
                  "REQUEST_ID_MISMATCH", "Review request must match prepared request")
             need(isinstance(narration, str) and 0 < len(narration) <= 120_000,
                  "SCENE_TEXT", "Review requires the complete scene")
             skin = self._read(self.instructions, "skin_builder.md")
             actual_sha = digest(skin)
-            need(skin_sha256 == actual_sha, "SKIN_VERSION_CHANGED",
-                 "Refresh the active Skin Builder; never validate with an older edition")
+            need(skin_sha256 == actual_sha == packet.get("skin_sha256"), "SKIN_VERSION_CHANGED",
+                 "Refresh the active Skin Builder: prepare and read the fresh packet")
+            need(digest(self._read(self.instructions, "rules.md")) == packet.get("rules_sha256"),
+                 "RULES_VERSION_CHANGED", "Rules changed; prepare and read the fresh packet")
             sections = scene_preflight.review_sections(skin)
             problems = (scene_preflight.layout_errors(skin, narration, meta["turn"] + 1)
                         + scene_preflight.report_errors(skin, checks)
@@ -1186,7 +1313,8 @@ class Engine:
                     "reader_text", "narration", "participants", "state",
                     "knowledge", "events", "relations"}
         need(isinstance(data, dict) and required <= set(data) and
-             set(data) <= required | {"thread_updates", "hook_updates", "scene_access"},
+             set(data) <= required | {"thread_updates", "hook_updates", "scene_access",
+                                       "new_character_evidence"},
              "TURN_FIELDS", "Turn payload has fixed storage fields")
         req = data["request_id"]
         need(isinstance(req, str) and 1 <= len(req) <= 100, "REQUEST_ID", "Invalid request id")
@@ -1222,15 +1350,22 @@ class Engine:
                  packet["request_id"] == req, "REQUEST_ID_MISMATCH",
                  "Prepared request ID and committed request ID differ")
             need(packet.get("source_signature") ==
-                 self._source_signature(path, set(packet["participants"]),
-                                        "turn"),
+                 self._source_signature(path, set(packet["participants"]) -
+                                         set(packet.get("new_characters", {})), "turn"),
                  "SOURCE_CHANGED", "A file changed after preparing the context")
             need(packet["reader_text"] == data["reader_text"],
                  "INPUT_MISMATCH", "Prepared and committed reader text differ")
             # Full authored Skin Builder review is a mandatory pre-save gate.
             # Synthetic fixtures without an authored format remain compatible.
             skin = self._read(self.instructions, "skin_builder.md")
-            if scene_preflight.is_formatted_builder(skin):
+            need(digest(skin) == packet.get("skin_sha256"), "SKIN_VERSION_CHANGED",
+                 "Refresh the active Skin Builder: prepare and read the fresh packet")
+            need(digest(self._read(self.instructions, "rules.md")) == packet.get("rules_sha256"),
+                 "RULES_VERSION_CHANGED", "Rules changed; prepare and read the fresh packet")
+            need(packet.get("scene_review_enabled") == self.scene_review_enabled,
+                 "REVIEW_MODE_CHANGED", "Prepare fresh context for the current review mode")
+            if self.scene_review_enabled and (scene_preflight.is_formatted_builder(skin)
+                                               or packet.get("new_characters")):
                 receipt = meta.get("scene_review") or {}
                 need(receipt.get("request_id") == req
                      and receipt.get("packet_id") == data["packet_id"]
@@ -1241,18 +1376,32 @@ class Engine:
                      "Review the exact final scene against every current Skin Builder "
                      "section before saving")
 
-            cast = self._cast(path)
+            registered_cast = self._cast(path)
+            proposals = self._character_proposals(
+                list(packet.get("new_characters", {}).values()), registered_cast)
             used = data["participants"]
             need(isinstance(used, list) and len(used) == len(set(used)) and
                  set(used) <= set(packet["participants"]), "UNLOADED_CHARACTER",
                  "Load any entering character before writing")
             need(isinstance(data["narration"], str) and bool(data["narration"].strip())
                  and len(data["narration"]) <= 120_000, "SCENE_TEXT", "Invalid full scene")
+            # Persist only proposals actually used in the final saved scene.
+            new_npcs = {name: dict(row) for name, row in proposals.items() if name in used}
+            final_evidence = data.get("new_character_evidence", {})
+            need(isinstance(final_evidence, dict) and set(final_evidence) <= set(new_npcs)
+                 and all(isinstance(quote, str) and 8 <= len(quote.strip()) <= 4000
+                         for quote in final_evidence.values()),
+                 "CHARACTER_SOURCE", "Final NPC evidence belongs only to used temporary NPCs")
+            for name, quote in final_evidence.items():
+                new_npcs[name]["established_text"] = quote
+            need(all(row["established_text"] in data["narration"] for row in new_npcs.values()),
+                 "CHARACTER_SOURCE", "New NPC card requires an exact excerpt from the final approved scene")
+            cast = registered_cast | set(new_npcs)
             state = validate_state(data["state"], cast, meta["turn"] + 1)
             need((set(state["present"]) | set(state["remote"])) <= set(used),
                  "STATE_UNLOADED", "All present/remote characters must be loaded")
             before_state = json.loads(self._read(path, "state.md"))
-            validate_state(before_state, cast, meta["turn"])
+            validate_state(before_state, registered_cast, meta["turn"])
             # A loaded card or presence in an earlier scene is NOT proof
             # of witnessing this one: the new turn may jump in time/place.
             # Anyone who left by the final state needs a literal witness
@@ -1338,6 +1487,20 @@ class Engine:
                       "relationships.md": before_rel, "timeline.md": before_timeline,
                       "open_threads.md": before_threads,
                       "hooks.md": before_hooks}
+            created_files = []
+            if new_npcs:
+                old_novel = self._read(path, "novel.md")
+                need(not meta.get("novel_hash") or digest(old_novel) == meta["novel_hash"],
+                     "CANON_CHANGED", "Main questionnaire changed outside the engine")
+                before["novel.md"] = old_novel
+                files["novel.md"] = self._with_new_cast(old_novel, new_npcs)
+                for name, row in new_npcs.items():
+                    card, memory = "characters/" + name + ".md", "knowledge/" + name + ".md"
+                    need(not (path / card).exists() and not (path / memory).exists(),
+                         "CHARACTER_EXISTS", "New NPC files already exist")
+                    files[card] = CHARACTER_RULE + row["established_text"]
+                    files[memory] = "# Новые знания: " + name + "\n"
+                    created_files.extend([card, memory])
             need(isinstance(data["knowledge"], list), "KNOWLEDGE_TYPE",
                  "Knowledge entries must be a list")
             knowledge_rows: list[dict] = []
@@ -1390,7 +1553,7 @@ class Engine:
             warnings = (["SCENE_NEAR_DUPLICATE"]
                         if _near_duplicate(data["narration"], older_scenes) else [])
             warnings.extend(_speech_knowledge_flags(
-                self._read(path, "novel.md"), data["narration"],
+                files.get("novel.md", self._read(path, "novel.md")), data["narration"],
                 json.loads(after_rel)))
             record = {"kind": "turn", "turn": meta["turn"] + 1, "request_id": req,
                       "reader_text": data["reader_text"], "narration": data["narration"],
@@ -1399,6 +1562,7 @@ class Engine:
                       "events": data["events"], "relations": data["relations"],
                       "thread_updates": thread_changes,
                       "hook_updates": hook_changes,
+                      "new_characters": list(new_npcs.values()),
                       "story_plan": packet.get("story_plan"),
                       "warnings": warnings}
             due = 60 if (meta["turn"] + 1) % 60 == 0 else \
@@ -1414,8 +1578,13 @@ class Engine:
                         hook_file_hash=digest(after_hooks),
                        audit_due=due, packet=None,
                        last_undo={"request_id": req, "before": before,
+                                  "created_files": created_files,
                                   "prior_turn": meta["turn"],
                                   "prior_audit_due": meta["audit_due"]})
+            if new_npcs:
+                new["novel_hash"] = digest(files["novel.md"])
+                new["card_hashes"] = {**meta.get("card_hashes", {}), **{
+                    name: digest(files["characters/" + name + ".md"]) for name in new_npcs}}
             # Director receipt belongs to the previous version; avoid retaining
             # large unused planning indexes in session metadata.
             for key in tuple(new):
@@ -1443,6 +1612,7 @@ class Engine:
                  isinstance(reason, str) and reason.strip(), "ROLLBACK_LAST_ONLY",
                  "Rollback requires exact last turn request id and reason")
             files = deepcopy(undo["before"])
+            created_files = undo.get("created_files", [])
             marker = dump({"kind": "rollback", "reverts": request_id,
                            "reason": reason, "turn": meta["turn"]}) + "\n"
             new = deepcopy(meta)
@@ -1459,9 +1629,15 @@ class Engine:
                                      if turn <= undo["prior_turn"]}
             else:
                 new.pop("first_seen", None)  # legacy undo; rebuild from active archive
+            if created_files:
+                new["novel_hash"] = digest(files["novel.md"])
+                new["card_hashes"] = {name: checksum for name, checksum in
+                    meta.get("card_hashes", {}).items()
+                    if "characters/" + name + ".md" not in created_files}
+            new["scene_review"] = None
             new["requests"][request_id]["reverted"] = True
             self._write(path, meta, files, new,
-                        appends={"history.jsonl": marker})
+                        appends={"history.jsonl": marker}, deletes=created_files)
             return {"rolled_back": True, "turn": new["turn"],
                     "version": new["version"]}
 
@@ -1474,6 +1650,8 @@ class Engine:
             need(packet.get("packet_stamp") == self._packet_stamp(path),
                  "PACKET_CHANGED", "Prepared audit context bytes changed")
             need(meta["audit_due"] in (15, 60), "AUDIT_NOT_DUE", "No audit due")
+            need(digest(self._read(self.instructions, "rules.md")) == packet.get("rules_sha256"),
+                 "RULES_VERSION_CHANGED", "Rules changed; prepare and read the fresh audit packet")
             required = {"continuity", "state", "knowledge", "timeline", "relationships"}
             if meta["audit_due"] == 60:
                 required |= {"long_term"}

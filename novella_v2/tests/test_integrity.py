@@ -53,10 +53,11 @@ class TestV2Integrity(unittest.TestCase):
     def path(self, filename):
         return self.root / "storage" / self.sid / filename
 
-    def packet(self, reader="действие", participants=None, kind="turn"):
+    def packet(self, reader="действие", participants=None, kind="turn", new_characters=None):
         if kind == "turn":
             self.engine.director_brief(self.sid)
-        p = self.engine.prepare(self.sid, reader, participants or ["adrian"], kind)
+        p = self.engine.prepare(self.sid, reader, participants or ["adrian"], kind,
+                                new_characters=new_characters)
         values = []
         for n in range(p["chunk_count"]):
             result = self.engine.read_chunk(self.sid, p["packet_id"], n)
@@ -491,10 +492,11 @@ class TestV2Integrity(unittest.TestCase):
 
     def test_new_character_is_optional_and_id_has_no_number(self):
         meta = self.engine.status(self.sid)
-        self.engine.add_character(self.sid, meta["version"], "margaret", "Маргарет",
+        proposal = self.engine.add_character(self.sid, meta["version"], "margaret", "Маргарет",
                                   "Маргарет вошла в комнату.")
-        self.assertTrue(self.path("characters/margaret.md").exists())
-        p, v = self.packet(participants=["adrian", "margaret"])
+        self.assertFalse(self.path("characters/margaret.md").exists())
+        p, v = self.packet(participants=["adrian", "margaret"],
+                           new_characters=[proposal["proposal"]])
         self.assertIn("characters/margaret.md", v["files"])
         self.assertEqual(v["files"]["knowledge/margaret.md"], "# Новые знания: margaret\n")
         self.assertNotIn("NPC_001", v["files"]["novel.md"])

@@ -3,13 +3,15 @@
 This server handles only new NV2_ sessions. Use the existing Lite plugin for
 LITE_ sessions. Never migrate or rewrite Lite/CN_ games through this server.
 
-At the first use in a new chat, call load_v2_instructions once and read the
-complete rules.content and skin_builder.content, verifying their UTF-8 SHA-256.
-Thereafter use those versions for the current chat. Reload only when the user
-explicitly requests an update (or once to recover texts lost after compaction).
-instruction_versions returns hashes only. A refresh is technical, not a turn.
-Never rewrite, replace or supplement the author's Skin Builder. If empty, keep
-it empty. Rules describe mechanics; they must not dictate literary style.
+At the first use in a new chat, call load_v2_instructions(rules_only=true)
+and read the complete Rules before the director. Do not fetch Skin Builder
+at chat bootstrap. Each new turn packet supplies current Rules first,
+then the last three full active scenes in chronological order, then all
+world context and the current full Skin Builder in dedicated FINAL chunks.
+Never rewrite, replace or supplement the author's Skin Builder. If empty,
+keep it empty. Rules describe mechanics; Skin Builder governs artistic style.
+The full combined instructions endpoint is only for explicit inspection.
+instruction_versions returns hashes only; refresh is not a game turn.
 
 For new setup, preserve the entire author's original verbatim. Assign all text
 exactly once with ordered unique anchors or contiguous Unicode ranges. Preserve
@@ -37,8 +39,19 @@ report it; NEVER retroactively invent or rewrite scenes to pretend compliance.
 
 Use the brief + reader's input + current scene to decide participants; load
 FULL character cards for every genuinely participating NPC with prepare.
-For entering characters not already prepared, reprepare once and read the
-new packet. A director-only actor who acts OFFSCREEN is not automatically
+For existing entering characters not already prepared, reprepare once and read
+the new packet. For genuinely new NPCs, pass new_characters to prepare:
+{name, display, established_text} (stable English ID, name, planned literal
+scene excerpt). add_v2_character is validation only; it returns a proposal,
+not a registered character. Proposals live in the current packet only,
+not in canon, state or knowledge files. If the final draft changes the
+excerpt, pass the exact final quote in save_v2_turn.new_character_evidence
+(mapping staged NPC ID to quote). No reprepare solely for a changed quote
+if the NPC identity and participants are unchanged. Only
+final narration with the exact excerpt and actual participation
+registers a new NPC in the same commit as all game changes. Unused proposals
+are discarded. Rollback of that turn removes its new NPC documents and cast
+entries; original canon and cancelled archive narration stay intact. A director-only actor who acts OFFSCREEN is not automatically
 POV knowledge, and cannot receive personal knowledge without validated
 scene access.
 
@@ -97,11 +110,15 @@ If reused_pending_packet is true, continue that packet and read ONLY its
 unread_chunk_indices. Retain session_id, request_id, packet_id and read progress.
 Use read_v2_chunk to read each needed index once; verify each chunk's UTF-8
 SHA-256 against the manifest and the joined packet against its total SHA-256.
-Read all chunks before writing; require all_chunks_read=true from the last
-chunk response. Do not call prepare again merely to check readiness.
+Read every chunk in ascending order, starting at 0, following next_chunk_index.
+Rules precede recent_scenes (oldest to newest), then files and plan. The
+Skin Builder block starts at skin_chunk_start and is always last. Read the
+complete final block, including all its chunks, before writing. Require
+all_chunks_read=true. Do not call prepare merely to check readiness.
 
 relationships.md and open_threads.md must be read in EVERY turn/audit/canon
-packet, including empty files. Rules and Skin Builder are not in these packets.
+packet, including empty files. Rules starts every packet. Skin Builder is
+last in turn packets only; audit and canon do not contain it.
 Load complete cards and personal knowledge for actual scene participants.
 Director context, hidden lore, relations, arcs, timeline and other characters'
 memories do not automatically become an NPC's knowledge. Before committing,
@@ -129,9 +146,18 @@ substantially changed or actually closed threads, with stable id and an exact
 source quote from narration. Otherwise use []. Closed threads leave the
 working file but remain archived. No forced deadlines or scheduled revelations.
 
-MANDATORY FULL SKIN BUILDER SCENE PREFLIGHT BEFORE EVERY SAVE:
+SCENE REVIEW MODE (server-controlled; disabled by default):
+Read scene_review_enabled from prepare and the final Skin Builder block.
+If false, DO NOT call review_v2_scene or get_v2_review_manifest, create
+review reports, enforce separate machine literary format, or loop rewriting.
+Write the scene directly according to the fresh full Skin Builder, including
+its own final-output instructions. Then compute game changes from the final
+narration and call save_v2_turn. Technical integrity checks remain mandatory.
+If true, use the retained strict preflight procedure below.
+
+STRICT PREFLIGHT — ONLY WHEN scene_review_enabled=true:
 Draft the complete narration without publishing it. Compare that entire draft
-against EVERY line, requirement and prohibition of the currently loaded,
+against EVERY line, requirement and prohibition of the fresh, last-read,
 authoritative Skin Builder. Do not substitute prior scenes, recent messages,
 a shortened summary or a generic scene-quality checklist for the author's text.
 Check header field order, all message/SMS visual formatting, counts/length,
@@ -140,9 +166,9 @@ cards and knowledge boundaries, genre execution, director continuity, ending,
 suggested choices, state/relationships output and ALL other authored rules.
 Check EVERY applicable instruction within EACH heading, not just the heading.
 
-After loading instructions, call get_v2_review_manifest ONCE per chat
-(or after an explicit instructions refresh) to obtain the COMPLETE list
-of substantive authored rule lines with stable IDs. Never call it every turn.
+The final Skin Builder block contains review_sections, review_rule_ids
+(stable L-numbered lines) and the full content, in that order. Use them
+directly; no separate manifest call during normal turn loading.
 For EACH section submit ReviewCheck {section, result, note}. In addition,
 for EVERY authored line from that manifest submit RuleCheck
 {id, result: pass | not_applicable | fail, note: specific explanation,
@@ -168,12 +194,17 @@ The server cannot verify artistic meaning; the model must make the review
 specific and faithful to the author's ENTIRE Skin Builder. Never rewrite the
 author's Skin Builder itself to satisfy the review.
 
-Commit using the ORIGINAL request_id, packet_id, chunk_hashes and reader_text.
+Before successful commit, do NOT mutate any game documents, including NPC
+cards, history, timeline, relationships, knowledge, hooks, arcs and world state.
+If enabled, review writes only a technical receipt. Derive all updates from the
+final narration. Commit using the ORIGINAL request_id, packet_id, chunk_hashes and reader_text.
 Publish narration ONLY after saved=true; return the confirmed saved narration.
 Identical retries must preserve the entire payload and must not create a turn.
 On timeout/5xx retry that exact operation at most twice. If save status is
 unknown, prepare with the SAME request_id to recover a committed result.
-For 4xx/validation errors read the exact code and correct the cause once; if it
+If RULES_VERSION_CHANGED, SKIN_VERSION_CHANGED or REVIEW_MODE_CHANGED, reprepare with the same
+request_id, reader_text and plan, then read the new ordered packet and use
+its fresh final Skin Builder. For other 4xx/validation errors read the exact code and correct the cause once; if it
 recurs, stop and explain it. Never loop prepare/read/rewrite. A near-duplicate
 warning is informational and does not require an artificial plot change.
 

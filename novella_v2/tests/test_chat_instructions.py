@@ -1,4 +1,4 @@
-"""Chat-scoped instruction retrieval: no full Rules/Skin Builder in every turn."""
+"""Ordered per-turn instruction snapshots and chronological scene context."""
 from __future__ import annotations
 
 from hashlib import sha256
@@ -11,7 +11,7 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 import novella_v2.api as api
-from novella_v2.engine import Engine, empty_actor
+from novella_v2.engine import Engine, EngineError, digest, empty_actor
 
 
 def scene_state(n=0):
@@ -60,7 +60,8 @@ class TestChatInstructions(unittest.TestCase):
 
     def test_initial_chat_read_returns_both_complete_texts(self):
         data = self.engine.load_instructions()
-        self.assertEqual(data["refresh_policy"], "manual_per_chat")
+        self.assertEqual(data["refresh_policy"], "rules_first_skin_last_per_turn")
+        self.assertFalse(data["scene_review_enabled"])
         self.assertEqual(data["rules"]["content"], "Механика: исходные правила.\n")
         self.assertEqual(data["skin_builder"]["content"], "")
         self.assertEqual(data["skin_builder"]["chars"], 0)
@@ -83,7 +84,8 @@ class TestChatInstructions(unittest.TestCase):
     def test_versions_returns_only_hashes_never_full_instructions(self):
         meta = self.engine.instruction_versions()
         self.assertEqual(set(meta),
-                         {"rules_sha256", "skin_builder_sha256", "skin_builder_empty"})
+                         {"rules_sha256", "skin_builder_sha256", "skin_builder_empty", "scene_review_enabled"})
+        self.assertFalse(meta["scene_review_enabled"])
         self.assertTrue(meta["skin_builder_empty"])
         self.assertEqual(meta["rules_sha256"],
                          sha256(self.rules.read_bytes()).hexdigest())
@@ -102,71 +104,126 @@ class TestChatInstructions(unittest.TestCase):
                          "Новый Skin Builder: текст пользователя")
         self.assertFalse(updated["skin_builder"]["empty"])
 
-    def test_rules_builder_never_appear_in_game_packet(self):
+    def save(self, packet, number, narration):
+        return self.engine.commit(self.sid, {
+            "request_id": packet["request_id"], "expected_version": packet["version"],
+            "packet_id": packet["packet_id"], "chunk_hashes": packet["chunk_hashes"],
+            "reader_text": "Привет", "narration": narration,
+            "participants": ["adrian"], "state": scene_state(number),
+            "knowledge": [], "events": [], "relations": [],
+        })
+
+    def test_rules_only_bootstrap_never_reads_skin(self):
+        original = Engine._read
+        def read(path, name):
+            self.assertNotEqual(name, "skin_builder.md")
+            return original(path, name)
+        with patch.object(Engine, "_read", side_effect=read):
+            data = self.engine.load_instructions(rules_only=True)
+        self.assertEqual(data["rules"]["content"], self.rules.read_text())
+        self.assertNotIn("skin_builder", data)
+
+    def test_ordered_turn_packet_rules_recent_scenes_then_skin(self):
+        self.skin.write_text("Художественный текст. 🌟", encoding="utf-8")
         packet = self.packet()
-        context = self.read_packet(packet)
-        self.assertEqual(context["instructions_mode"], "loaded_once_per_chat")
-        self.assertNotIn("engine/rules.md", context["files"])
-        self.assertNotIn("engine/skin_builder.md", context["files"])
+        parts = [self.engine.read_chunk(self.sid, packet["packet_id"], i)
+                 for i in range(packet["chunk_count"])]
+        context = json.loads("".join(p["content"] for p in parts))
+        self.assertEqual(list(context)[:2], ["rules", "recent_scenes"])
+        self.assertEqual(list(context)[-1], "skin_builder")
+        self.assertEqual(context["instructions_mode"], "rules_first_skin_last_per_turn")
+        self.assertEqual(context["rules"]["content"], self.rules.read_text())
+        self.assertEqual(context["skin_builder"]["content"], self.skin.read_text())
+        self.assertEqual(context["skin_builder"]["sha256"], digest(self.skin.read_text()))
         self.assertIn("novel.md", context["files"])
         self.assertIn("characters/adrian.md", context["files"])
-        self.assertNotIn(self.rules.read_text(encoding="utf-8"),
-                         json.dumps(context, ensure_ascii=False))
+        self.assertEqual(parts[-1]["phase"], "skin_builder")
+        self.assertTrue(parts[packet["skin_chunk_start"]]["content"].startswith(',"skin_builder":'))
+        self.assertTrue(parts[-1]["all_chunks_read"])
+        self.assertEqual(digest("".join(p["content"] for p in parts)), packet["sha256"])
 
-    def test_prepare_does_not_read_any_instruction_files(self):
-        instruction_reads = []
-        previous = Engine._read
-
-        def observed(path, name):
-            if name in ("rules.md", "skin_builder.md"):
-                instruction_reads.append(name)
-            return previous(path, name)
-
-        with patch.object(Engine, "_read", side_effect=observed):
-            packet = self.packet()
+    def test_three_full_active_scenes_in_chronological_order_after_rollback(self):
+        for number in range(1, 5):
+            packet = self.packet(f"scene-{number}")
             self.read_packet(packet)
-        self.assertEqual(instruction_reads, [])
+            self.save(packet, number, f"Полная сцена {number}.")
+        self.engine.rollback(self.sid, self.engine.status(self.sid)["version"],
+                             "scene-4", "Отмена четвертой сцены")
+        packet = self.packet("scene-5")
+        context = self.read_packet(packet)
+        self.assertEqual(list(context)[:2], ["rules", "recent_scenes"])
+        self.assertEqual([r["turn"] for r in context["recent_scenes"]], [1, 2, 3])
+        self.assertEqual([r["narration"] for r in context["recent_scenes"]],
+                         [f"Полная сцена {n}." for n in range(1, 4)])
+        self.assertEqual([r["reader_text"] for r in context["recent_scenes"]], ["Привет"] * 3)
+        self.assertNotIn("Полная сцена 4.", json.dumps(context, ensure_ascii=False))
 
-    def test_editing_instructions_does_not_invalidate_prepared_packet(self):
+    def test_cannot_read_final_skin_before_context(self):
+        packet = self.packet()
+        with self.assertRaisesRegex(EngineError, "next unread chunk"):
+            self.engine.read_chunk(self.sid, packet["packet_id"], packet["skin_chunk_start"])
+        self.assertEqual(self.packet()["unread_chunk_indices"], list(range(packet["chunk_count"])))
+        self.read_packet(packet)
+
+    def test_instruction_change_invalidates_pending_packet_but_not_same_request_retry(self):
         first = self.packet()
+        self.assertEqual(first["packet_id"], self.packet()["packet_id"])
         self.rules.write_text("Правила 2027", encoding="utf-8")
         self.skin.write_text("Новый Skin Builder", encoding="utf-8")
-        reused = self.packet()
-        self.assertEqual(first["packet_id"], reused["packet_id"])
-        self.assertTrue(reused["reused_pending_packet"])
-        self.assertEqual(first["sha256"], reused["sha256"])
+        fresh = self.packet()
+        self.assertNotEqual(first["packet_id"], fresh["packet_id"])
+        self.assertFalse(fresh["reused_pending_packet"])
+        context = self.read_packet(fresh)
+        self.assertEqual(context["rules"]["content"], "Правила 2027")
+        self.assertEqual(context["skin_builder"]["content"], "Новый Skin Builder")
 
-    def test_instruction_change_does_not_block_commit(self):
+    def test_skin_changed_after_context_before_final_read_is_rejected(self):
+        packet = self.packet()
+        for i in range(packet["skin_chunk_start"]):
+            self.engine.read_chunk(self.sid, packet["packet_id"], i)
+        self.skin.write_text("Новая версия", encoding="utf-8")
+        with self.assertRaisesRegex(EngineError, "Skin Builder changed"):
+            self.engine.read_chunk(self.sid, packet["packet_id"], packet["skin_chunk_start"])
+
+    def test_skin_changed_after_read_cannot_save_old_packet(self):
         packet = self.packet()
         self.read_packet(packet)
         self.skin.write_text("Обновлено по команде читателя", encoding="utf-8")
-        # Even a minimal nonempty authored builder requires an explicit review.
-        self.engine.review_scene(
-            self.sid, packet["version"], packet["packet_id"], "chat-1",
-            sha256(self.skin.read_bytes()).hexdigest(),
-            "**Адриан** — Здравствуй.",
-            [{"section": "SKIN BUILDER: ВЕСЬ ТЕКСТ", "result": "pass",
-              "note": "Вся актуальная пользовательская инструкция проверена."}],
-            [{"id": "L1", "result": "pass",
-              "note": "Проверена авторская инструкция по сцене.",
-              "evidence": "**Адриан** — Здравствуй."}])
-        result = self.engine.commit(self.sid, {
-            "request_id": "chat-1", "expected_version": packet["version"],
-            "packet_id": packet["packet_id"], "chunk_hashes": packet["chunk_hashes"],
-            "reader_text": "Привет", "narration": "**Адриан** — Здравствуй.",
-            "participants": ["adrian"], "state": scene_state(1),
-            "knowledge": [], "events": [], "relations": [],
-        })
-        self.assertTrue(result["saved"])
+        with self.assertRaisesRegex(EngineError, "Refresh the active Skin Builder"):
+            self.save(packet, 1, "**Адриан** — Здравствуй.")
+        fresh = self.packet()
+        self.read_packet(fresh)
+        self.assertTrue(self.save(fresh, 1, "**Адриан** — Здравствуй.")["saved"])
 
-    def test_new_game_packet_after_instruction_update_still_excludes_full_text(self):
-        self.skin.write_text("ХУДОЖЕСТВЕННЫЙ ТЕКСТ " * 5000, encoding="utf-8")
+    def test_every_new_turn_reads_current_skin_not_previous_snapshot(self):
+        first = self.packet()
+        self.assertEqual(self.read_packet(first)["skin_builder"]["content"], "")
+        self.save(first, 1, "Первый ход.")
+        self.skin.write_text("Новый авторский текст", encoding="utf-8")
+        second = self.packet("chat-2")
+        self.assertEqual(self.read_packet(second)["skin_builder"]["content"], "Новый авторский текст")
+
+    def test_long_unicode_builder_and_rules_cross_chunk_boundaries_without_truncation(self):
+        self.rules.write_text("Механика 🌟 " * 5000, encoding="utf-8")
+        self.skin.write_text("ХУДОЖЕСТВЕННЫЙ ТЕКСТ 🌙 " * 5000, encoding="utf-8")
         packet = self.packet()
-        content = self.read_packet(packet)
-        self.assertNotIn("skin_builder.md", content["files"])
-        self.assertLess(len(json.dumps(content, ensure_ascii=False)), 36_000)
-        self.assertEqual(self.engine.load_instructions()["skin_builder"]["chars"],
-                         len("ХУДОЖЕСТВЕННЫЙ ТЕКСТ " * 5000))
+        parts = [self.engine.read_chunk(self.sid, packet["packet_id"], i)
+                 for i in range(packet["chunk_count"])]
+        self.assertGreater(packet["skin_chunk_start"], 1)
+        self.assertGreater(len(parts) - packet["skin_chunk_start"], 1)
+        self.assertTrue(all(len(p["content"]) <= 36_000 for p in parts))
+        text = "".join(p["content"] for p in parts)
+        content = json.loads(text)
+        self.assertEqual(digest(text), packet["sha256"])
+        self.assertEqual(content["rules"]["content"], self.rules.read_text())
+        self.assertEqual(content["skin_builder"]["content"], self.skin.read_text())
+
+    def test_canon_has_rules_without_skin(self):
+        packet = self.engine.prepare(self.sid, kind="canon")
+        context = self.read_packet(packet)
+        self.assertEqual(list(context)[0], "rules")
+        self.assertNotIn("skin_builder", context)
+        self.assertIsNone(packet["skin_chunk_start"])
 
 
 class TestChatInstructionsHttp(unittest.TestCase):
@@ -194,6 +251,9 @@ class TestChatInstructionsHttp(unittest.TestCase):
         self.assertEqual(first.status_code, 200)
         self.assertEqual(first.json()["rules"]["content"], "Rules v1")
         self.assertEqual(first.json()["skin_builder"]["content"], "")
+        bootstrap = self.http.get("/v2/instructions?rules_only=true").json()
+        self.assertEqual(bootstrap["rules"]["content"], "Rules v1")
+        self.assertNotIn("skin_builder", bootstrap)
         hashes = self.http.get("/v2/instructions/versions", headers=self.headers)
         self.assertEqual(hashes.status_code, 200)
         self.assertEqual(hashes.json()["rules_sha256"],

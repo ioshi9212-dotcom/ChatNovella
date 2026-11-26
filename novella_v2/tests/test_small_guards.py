@@ -188,13 +188,13 @@ class TestSmallGuards(unittest.TestCase):
                           if len(x.args) >= 2]
             self.assertNotIn("system/packet.json", read_paths)
 
-    def test_instruction_update_does_not_rebuild_existing_game_packet(self):
+    def test_instruction_update_rebuilds_existing_game_packet(self):
         first = self.prepare()
         builder = self.engine.instructions / "skin_builder.md"
         builder.write_text("Другая версия Skin Builder", encoding="utf-8")
         second = self.prepare()
-        self.assertEqual(first["packet_id"], second["packet_id"])
-        self.assertTrue(second["reused_pending_packet"])
+        self.assertNotEqual(first["packet_id"], second["packet_id"])
+        self.assertFalse(second["reused_pending_packet"])
         self.assertEqual(self.engine.load_instructions()["skin_builder"]["content"],
                          "Другая версия Skin Builder")
 

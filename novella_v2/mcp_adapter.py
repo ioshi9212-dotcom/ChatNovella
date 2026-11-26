@@ -18,7 +18,7 @@ from starlette.concurrency import run_in_threadpool
 
 from .engine import Engine, EngineError
 from .mcp_models import (
-    AnchorBlock, AuditReport, Checksum, Correction, HistoricalArc, HistoricalHook, HookUpdate, StoryPlan,
+    AnchorBlock, AuditReport, Checksum, Correction, HistoricalArc, HistoricalHook, HookUpdate, StoryPlan, NewCharacterProposal,
     RangeBlock, Relationships,
     RequestId, ReviewCheck, RuleCheck, SessionId, State, ThreadUpdate, Turn, Version,
 )
@@ -61,9 +61,9 @@ def build_mcp(engine: Callable[[], Engine]) -> FastMCP:
             raise ToolError("INVALID_VALUE: Invalid V2 field value or type") from None
 
     @server.tool(annotations=read)
-    async def load_v2_instructions() -> dict[str, Any]:
-        """Read FULL Rules + author Skin Builder once per new chat or explicit refresh. Verify SHA-256. Never call every turn."""
-        return await call("load_instructions")
+    async def load_v2_instructions(rules_only: bool = False) -> dict[str, Any]:
+        """Use rules_only=true at chat bootstrap before the director. Full pair only for explicit inspection; turn packets always supply fresh Rules and Skin Builder."""
+        return await call("load_instructions", rules_only)
 
     @server.tool(annotations=read)
     async def get_v2_instruction_versions() -> dict[str, Any]:
@@ -108,12 +108,12 @@ def build_mcp(engine: Callable[[], Engine]) -> FastMCP:
         return await call("set_opening", session_id, expected_version, state.model_dump(),
                           relationships.model_dump() if relationships is not None else None)
 
-    @server.tool(annotations=write)
+    @server.tool(annotations=read)
     async def add_v2_character(
         session_id: SessionId, expected_version: Version,
         name: str, display: str, established_text: str,
     ) -> dict[str, Any]:
-        """Register a genuinely appeared NPC with a stable English name and established text. Reprepare before using its card/knowledge."""
+        """Validate a temporary NPC proposal only. Pass returned proposal in prepare_v2_context.new_characters; final successful scene save creates permanent files."""
         return await call("add_character", session_id, expected_version, name, display, established_text)
 
     @server.tool(annotations=repeat)
@@ -148,25 +148,27 @@ def build_mcp(engine: Callable[[], Engine]) -> FastMCP:
         session_id: SessionId, reader_text: str, participants: list[str],
         kind: Literal["turn", "audit", "canon"], request_id: RequestId,
         story_plan: StoryPlan | None = None,
+        new_characters: list[NewCharacterProposal] | None = None,
     ) -> dict[str, Any]:
         """Use director first, then provide a short story_plan for plot-bearing turns.
         focus_ids are known arc:/hook:/window: IDs; direction, world, deferred explain
         the choice; priority maps exact plan_priority_ids to decisions. No quotas.
-        Keep request_id and plan on retries. No plan for canon/audit."""
+        Keep request_id and plan on retries. New NPCs use new_characters (name, display,
+        established_text: planned exact scene excerpt). These are temporary until
+        successful commit. If the excerpt changes, save_v2_turn.new_character_evidence
+        can provide the final quote. No proposals or plan for canon/audit."""
         return await call("prepare", session_id, reader_text, participants, kind, request_id,
-                          story_plan.model_dump() if story_plan is not None else None)
+                          story_plan.model_dump() if story_plan is not None else None,
+                          [row.model_dump() for row in new_characters] if new_characters is not None else None)
 
     @server.tool(annotations=repeat)
     async def read_v2_chunk(session_id: SessionId, packet_id: str, index: int) -> dict[str, Any]:
-        """Read one UNREAD zero-based chunk and receipt. Verify its SHA-256 and joined packet hash; require all_chunks_read before commit."""
+        """Read next unread chunk in ascending order. Rules first, recent scenes, world facts, then the final Skin Builder block. Verify hashes; write only after all_chunks_read."""
         return await call("read_chunk", session_id, packet_id, index)
 
     @server.tool(annotations=read)
     async def get_v2_review_manifest() -> dict[str, Any]:
-        """Get each authored Skin Builder rule with stable line ID. Call once after
-        loading instructions or when the user explicitly refreshes them.
-        The model must evaluate EVERY rule, not just section names.
-        """
+        """Inspect retained strict reviewer only. Do not call for normal turns, especially when scene_review_enabled=false."""
         return await call("scene_review_manifest")
 
     @server.tool(annotations=repeat)
@@ -176,7 +178,8 @@ def build_mcp(engine: Callable[[], Engine]) -> FastMCP:
         narration: str, checks: list[ReviewCheck],
         rule_checks: list[RuleCheck] | None = None,
     ) -> dict[str, Any]:
-        """MANDATORY before saving an authored V2 scene. Audit EVERY section
+        """Only when prepare.scene_review_enabled=true. Disabled by default: skip this tool.
+        In strict mode, audit EVERY section
         of the current full Skin Builder, including all individual rules.
         Fix any failed sections and rerun review on the exact final narration.
         Server checks mandatory formatting and binds approval to the final text.
@@ -189,7 +192,8 @@ def build_mcp(engine: Callable[[], Engine]) -> FastMCP:
 
     @server.tool(annotations=repeat)
     async def save_v2_turn(session_id: SessionId, turn: Turn) -> dict[str, Any]:
-        """Atomically save scene plus independent evidence-backed hook_updates. Never
+        """When scene_review_enabled=false, save final narration directly without review.
+        Atomically save scene plus independent evidence-backed hook_updates. Never
         erase old unresolved hooks when advancing another one. Publish only after saved=true."""
         return await call("commit", session_id, turn.model_dump(exclude_unset=True))
 

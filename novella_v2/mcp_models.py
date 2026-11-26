@@ -151,6 +151,12 @@ class RuleCheck(Model):
     evidence: str | None = None
 
 
+class NewCharacterProposal(Model):
+    name: str
+    display: Annotated[str, Field(min_length=1, max_length=120)]
+    established_text: Annotated[str, Field(min_length=8, max_length=4000)]
+
+
 class Turn(Model):
     request_id: RequestId
     expected_version: Version
@@ -166,6 +172,7 @@ class Turn(Model):
     thread_updates: list[ThreadUpdate] = Field(default_factory=list)
     hook_updates: list[HookUpdate] = Field(default_factory=list)
     scene_access: list[SceneAccess] = Field(default_factory=list)
+    new_character_evidence: dict[str, Annotated[str, Field(min_length=8, max_length=4000)]] = Field(default_factory=dict)
 
 
 class AuditReport(Model):

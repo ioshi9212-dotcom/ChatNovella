@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from hashlib import sha256
+import json
+from unittest.mock import patch
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -54,7 +56,7 @@ class TestSceneReview(unittest.TestCase):
         (self.instructions / "rules.md").write_text("Rules", encoding="utf-8")
         self.builder = self.instructions / "skin_builder.md"
         self.builder.write_text(self.skin, encoding="utf-8")
-        self.engine = Engine(base / "sessions", self.instructions)
+        self.engine = Engine(base / "sessions", self.instructions, scene_review_enabled=True)
         original = "Мир. Эдриан знаком с Ринатой."
         split = original.index("Эдриан")
         result = self.engine.create(original, [
@@ -104,11 +106,14 @@ class TestSceneReview(unittest.TestCase):
     def test_all_current_authored_sections_are_required(self):
         self.assertTrue(is_formatted_builder(self.skin))
         sections = review_sections(self.skin)
-        self.assertGreaterEqual(len(sections), 10)
-        self.assertIn("СЦЕНЫ ЗА КАДРОМ", sections)
-        self.assertIn("ПРОВЕРКА ПЕРЕД ВЫВОДОМ", sections)
-        self.assertIn("ПОЛНАЯ АВТОНОМИЯ НПС", sections)
-        self.assertIn("КОНЕЦ СЦЕНЫ", sections)
+        # Author may revise headings at any time. Test the parser against
+        # current text rather than pinning an old author's layout forever.
+        self.assertTrue(sections)
+        self.assertIn("ФОРМАТ СЦЕНЫ", sections)
+        self.assertEqual(len(sections), len(set(sections)))
+        sample = "ФОРМАТ СЦЕНЫ 📖\nСЦЕНЫ ЗА КАДРОМ: правило\n### 11. ПРОВЕРКА ПЕРЕД ВЫВОДОМ"
+        self.assertEqual(review_sections(sample),
+                         ["ФОРМАТ СЦЕНЫ", "СЦЕНЫ ЗА КАДРОМ", "ПРОВЕРКА ПЕРЕД ВЫВОДОМ"])
         self.assertTrue(any("Не проверен раздел" in e
                             for e in report_errors(self.skin, self.checks()[:-1])))
 
@@ -136,9 +141,12 @@ class TestSceneReview(unittest.TestCase):
 
     def test_cannot_skip_individual_rule_or_fake_evidence(self):
         self.assertGreater(len(review_items(self.skin)), 50)
-        authored = [item["text"] for item in review_items(self.skin)]
-        self.assertTrue(any("АВТОНОМИЯ ПОВ:" in text for text in authored))
-        self.assertTrue(any("ОТВЕТ ЧИТАТЕЛЯ:" in text for text in authored))
+        original_lines = self.skin.splitlines()
+        authored = review_items(self.skin)
+        self.assertTrue(all(item["text"] == original_lines[int(item["id"][1:]) - 1].strip()
+                            for item in authored))
+        sample = "АВТОНОМИЯ ПОВ: уважать ввод.\nОТВЕТ ЧИТАТЕЛЯ: не менять его."
+        self.assertEqual([item["text"] for item in review_items(sample)], sample.splitlines())
         items = self.rule_checks()
         self.assertTrue(any("Не проверено правило" in x for x in
                             rule_report_errors(self.skin, scene(), items[:-1])))
@@ -180,6 +188,196 @@ class TestSceneReview(unittest.TestCase):
         result = self.save(p, scene())
         self.assertTrue(result["saved"])
         self.assertEqual(self.engine.status(self.sid)["turn"], 1)
+
+    def game_files(self):
+        root = self.engine.root / self.sid
+        return {str(p.relative_to(root)): p.read_bytes()
+                for p in root.rglob("*") if p.is_file()
+                and "system" not in p.relative_to(root).parts}
+
+    def npc_packet(self, source="Маркус вошёл в комнату.", request_id="review-1"):
+        self.engine.director_brief(self.sid)
+        p = self.engine.prepare(self.sid, "Привет", ["adrian", "marcus"],
+            request_id=request_id, new_characters=[{
+                "name": "marcus", "display": "Маркус", "established_text": source}])
+        for index in p["unread_chunk_indices"]:
+            self.engine.read_chunk(self.sid, p["packet_id"], index)
+        return p
+
+    def npc_payload(self, p, narration, used=True):
+        current = state(1)
+        people = ["adrian"]
+        knowledge, events = [], []
+        if used:
+            current["present"]["marcus"] = empty_actor()
+            people.append("marcus")
+            knowledge.append({"owner": "marcus", "fact": "Вошёл в комнату",
+                              "source": "Маркус вошёл в комнату."})
+            events.append({"text": "Маркус вошёл в комнату.", "participants": ["marcus"]})
+        return {"request_id": "review-1", "expected_version": p["version"],
+                "packet_id": p["packet_id"], "chunk_hashes": p["chunk_hashes"],
+                "reader_text": "Привет", "narration": narration,
+                "participants": people, "state": current, "knowledge": knowledge,
+                "events": events, "relations": []}
+
+    def test_new_npc_and_all_game_files_unchanged_until_reviewed_commit(self):
+        before = self.game_files()
+        version = self.engine.status(self.sid)["version"]
+        proposal = self.engine.add_character(self.sid, version, "marcus", "Маркус",
+                                              "Маркус вошёл в комнату.")
+        self.assertFalse(proposal["added"])
+        self.assertEqual(self.game_files(), before)
+        p = self.npc_packet()
+        self.assertEqual(self.game_files(), before)
+        self.assertNotIn("marcus", self.engine._cast(self.engine.root / self.sid))
+        full = scene().replace("**Рината** — Привет.", "Маркус вошёл в комнату. **Рината** — Привет.")
+        data = self.npc_payload(p, full)
+        with self.assertRaisesRegex(EngineError, "Review the exact final scene"):
+            self.engine.commit(self.sid, data)
+        self.assertEqual(self.game_files(), before)
+        failed = self.review(p, "Маркус вошёл в комнату.")
+        self.assertFalse(failed["approved"])
+        self.assertEqual(self.game_files(), before)
+        approved = self.review(p, full)
+        self.assertTrue(approved["approved"], approved)
+        self.assertEqual(self.game_files(), before)
+        self.assertEqual(self.engine.status(self.sid)["version"], version)
+        saved = self.engine.commit(self.sid, data)
+        self.assertTrue(saved["saved"])
+        after = self.game_files()
+        self.assertIn(b"marcus", after["novel.md"])
+        self.assertIn("characters/marcus.md", after)
+        self.assertIn("knowledge/marcus.md", after)
+        self.assertIn("Маркус вошёл".encode(), after["timeline.md"])
+        self.assertEqual(self.engine.commit(self.sid, data), saved)
+        self.engine.rollback(self.sid, saved["version"], "review-1", "Отмена знакомства")
+        restored = self.game_files()
+        self.assertNotIn("characters/marcus.md", restored)
+        self.assertNotIn("knowledge/marcus.md", restored)
+        self.assertEqual({k:v for k,v in restored.items() if k != "history.jsonl"},
+                         {k:v for k,v in before.items() if k != "history.jsonl"})
+        self.assertIn(b'"kind":"rollback"', restored["history.jsonl"])
+        self.assertEqual(self.engine.status(self.sid)["turn"], 0)
+
+    def test_abandoned_temporary_npc_never_registers(self):
+        before = self.game_files()
+        p = self.npc_packet()
+        full = scene()
+        self.assertTrue(self.review(p, full)["approved"])
+        self.assertTrue(self.engine.commit(self.sid, self.npc_payload(p, full, used=False))["saved"])
+        after = self.game_files()
+        self.assertEqual(after["novel.md"], before["novel.md"])
+        self.assertNotIn("characters/marcus.md", after)
+        self.assertNotIn("knowledge/marcus.md", after)
+
+    def test_new_npc_requires_actual_approved_source(self):
+        before = self.game_files()
+        p = self.npc_packet()
+        full = scene()
+        self.assertTrue(self.review(p, full)["approved"])
+        with self.assertRaisesRegex(EngineError, "exact excerpt"):
+            self.engine.commit(self.sid, self.npc_payload(p, full))
+        self.assertEqual(self.game_files(), before)
+
+    def test_new_npc_final_quote_can_change_without_reprepare(self):
+        p = self.npc_packet(source="Маркус подошёл к окну.")
+        full = scene().replace("**Рината** — Привет.", "Маркус вошёл в комнату. **Рината** — Привет.")
+        self.assertTrue(self.review(p, full)["approved"])
+        data = self.npc_payload(p, full)
+        data["new_character_evidence"] = {"marcus": "Маркус вошёл в комнату."}
+        self.assertTrue(self.engine.commit(self.sid, data)["saved"])
+        card = self.game_files()["characters/marcus.md"].decode()
+        self.assertIn("Маркус вошёл в комнату.", card)
+        self.assertNotIn("Маркус подошёл к окну.", card)
+
+    def test_new_npc_rollback_recovers_interrupted_deletion(self):
+        p = self.npc_packet()
+        full = scene().replace("**Рината** — Привет.", "Маркус вошёл в комнату. **Рината** — Привет.")
+        self.assertTrue(self.review(p, full)["approved"])
+        saved = self.engine.commit(self.sid, self.npc_payload(p, full))
+        from novella_v2.engine import remove_character_file
+        deleted = []
+        def fail_once(path, name):
+            remove_character_file(path, name)
+            deleted.append(name)
+            if len(deleted) == 1:
+                raise OSError("synthetic power loss")
+        with patch("novella_v2.engine.remove_character_file", side_effect=fail_once):
+            with self.assertRaisesRegex(OSError, "synthetic power loss"):
+                self.engine.rollback(self.sid, saved["version"], "review-1", "Отмена")
+        restarted = Engine(self.engine.root, self.instructions)
+        self.assertEqual(restarted.status(self.sid)["turn"], 0)
+        self.assertFalse((self.engine.root / self.sid / "characters/marcus.md").exists())
+        self.assertFalse((self.engine.root / self.sid / "knowledge/marcus.md").exists())
+        self.assertNotIn("marcus", restarted._cast(self.engine.root / self.sid))
+
+    def test_default_disabled_saves_scene_without_literary_review(self):
+        with patch.dict("os.environ", {}, clear=True):
+            self.engine = Engine(self.engine.root, self.instructions)
+        self.assertFalse(self.engine.scene_review_enabled)
+        before = self.game_files()
+        with patch("novella_v2.scene_preflight.review_items",
+                   side_effect=AssertionError("Disabled review must not build a report")), \
+             patch("novella_v2.scene_preflight.layout_errors",
+                   side_effect=AssertionError("Disabled review must not check layout")):
+            p = self.packet()
+            self.assertFalse(p["scene_review_enabled"])
+            payload = json.loads((self.engine.root / self.sid / "system/packet.json").read_text())
+            self.assertFalse(payload["skin_builder"]["scene_review_enabled"])
+            self.assertNotIn("review_rule_ids", payload["skin_builder"])
+            self.assertNotIn("review_sections", payload["skin_builder"])
+            self.assertEqual(payload["skin_builder"]["content"], self.skin)
+            self.assertEqual(list(payload)[-1], "skin_builder")
+            result = self.engine.review_scene(self.sid, p["version"], p["packet_id"],
+                       "review-1", p["skin_sha256"], "Короткая сцена.", [], [])
+            self.assertTrue(result["skipped"])
+            self.assertFalse(result["approved"])
+            self.assertEqual(self.game_files(), before)
+            saved = self.save(p, "Короткая сцена.")
+            self.assertTrue(saved["saved"])
+            self.assertEqual(saved["turn"], 1)
+
+    def test_disabled_new_npc_still_requires_final_scene_evidence(self):
+        self.engine.scene_review_enabled = False
+        before = self.game_files()
+        p = self.npc_packet()
+        with self.assertRaisesRegex(EngineError, "exact excerpt"):
+            self.engine.commit(self.sid, self.npc_payload(p, "Маркус молчал."))
+        self.assertEqual(self.game_files(), before)
+        result = self.engine.commit(self.sid, self.npc_payload(p, "Маркус вошёл в комнату."))
+        self.assertTrue(result["saved"])
+        self.assertIn("characters/marcus.md", self.game_files())
+        self.engine.rollback(self.sid, result["version"], "review-1", "Отмена")
+        self.assertNotIn("characters/marcus.md", self.game_files())
+
+    def test_reenable_review_requires_fresh_packet_and_real_receipt(self):
+        self.engine.scene_review_enabled = False
+        old = self.packet()
+        with patch.dict("os.environ", {"CHATNOVELLA_V2_SCENE_REVIEW": "1"}):
+            self.engine = Engine(self.engine.root, self.instructions)
+        self.assertTrue(self.engine.scene_review_enabled)
+        with self.assertRaisesRegex(EngineError, "current review mode"):
+            self.save(old, scene())
+        fresh = self.packet()
+        self.assertNotEqual(fresh["packet_id"], old["packet_id"])
+        self.assertTrue(fresh["scene_review_enabled"])
+        with self.assertRaisesRegex(EngineError, "Review the exact final scene"):
+            self.save(fresh, scene())
+        self.assertTrue(self.review(fresh, scene())["approved"])
+        self.assertTrue(self.save(fresh, scene())["saved"])
+
+    def test_disabled_review_does_not_bypass_chunk_or_instruction_integrity(self):
+        self.engine.scene_review_enabled = False
+        self.engine.director_brief(self.sid)
+        p = self.engine.prepare(self.sid, "Привет", ["adrian"], request_id="review-1")
+        with self.assertRaisesRegex(EngineError, "Read and verify all"):
+            self.save(p, "Сцена.")
+        for index in p["unread_chunk_indices"]:
+            self.engine.read_chunk(self.sid, p["packet_id"], index)
+        self.builder.write_text(self.skin + "\nНовая версия.", encoding="utf-8")
+        with self.assertRaisesRegex(EngineError, "Refresh the active Skin Builder"):
+            self.save(p, "Сцена.")
+        self.assertEqual(self.engine.status(self.sid)["turn"], 0)
 
     def test_explicit_builder_version_binding(self):
         p = self.packet()
