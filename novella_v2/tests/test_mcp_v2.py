@@ -212,6 +212,22 @@ class TestV2MCP(unittest.TestCase):
         self.assertEqual(versions["rules_sha256"], instructions["rules"]["sha256"])
         self.assertNotIn("content", json.dumps(versions))
 
+    def test_default_mcp_turn_skips_literary_review_with_real_builder(self):
+        sid = self.start()
+        p = self.tool("prepare_v2_context", session_id=sid,
+                      reader_text="Привет", participants=["adrian"],
+                      kind="turn", request_id="no-literary-review")
+        self.assertFalse(p["scene_review_enabled"])
+        self.read(sid, p)
+        turn = {"request_id": "no-literary-review", "expected_version": p["version"],
+                "packet_id": p["packet_id"], "chunk_hashes": p["chunk_hashes"],
+                "reader_text": "Привет", "narration": "Адриан поздоровался.",
+                "participants": ["adrian"], "state": self.state(1),
+                "knowledge": [], "events": [], "relations": []}
+        result = self.tool("save_v2_turn", session_id=sid, turn=turn)
+        self.assertTrue(result["saved"])
+        self.assertEqual(result["turn"], 1)
+
     def test_review_tool_returns_full_builder_failures_before_save(self):
         self.engine.scene_review_enabled = True
         sid = self.start()

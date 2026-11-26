@@ -103,7 +103,7 @@ chatnovella/, chatnovella_lite/ и прежние плагины в GitHub ос�
 - POST /{sid}/approve — expected_version, canon_hash, confirmation.
 - POST /{sid}/opening — expected_version, state, необязательные relationships.
 - POST /{sid}/characters — проверить временное предложение NPC (без записи).
-  Передать proposal в prepare.new_characters; только проверенный commit
+  Передать proposal в prepare.new_characters; только успешный commit
   регистрирует реально появившегося NPC, а rollback удаляет созданные файлы.
   Если планируемая фраза изменилась, new_character_evidence передаёт
   точную цитату из финальной сцены без дополнительного prepare.
@@ -145,7 +145,7 @@ load_v2_instructions(rules_only=true)) возвращает только Rules. 
 JSON: rules, recent_scenes (до трёх полных активных ходов, по возрастанию),
 затем все игровые сведения. Skin Builder передаётся последним, отдельным
 блоком из одного или нескольких чанков. skin_chunk_start указывает первый
-его чанк. Ничего игрового после текста Skin Builder нет. Проверки получают
+его чанк. Ничего игрового после текста Skin Builder нет. В строгом режиме проверки получают
 разделы и ID строк из этого же блока. Чтение по next_chunk_index обязательно.
 При неизменных исходных файлах повтор запроса сохраняет старый packet_id;
 при изменении Rules/Skin Builder создаётся новый пакет. Старый пакет не

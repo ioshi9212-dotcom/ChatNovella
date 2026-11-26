@@ -311,6 +311,74 @@ class TestSceneReview(unittest.TestCase):
         self.assertFalse((self.engine.root / self.sid / "knowledge/marcus.md").exists())
         self.assertNotIn("marcus", restarted._cast(self.engine.root / self.sid))
 
+    def test_default_disabled_saves_scene_without_literary_review(self):
+        with patch.dict("os.environ", {}, clear=True):
+            self.engine = Engine(self.engine.root, self.instructions)
+        self.assertFalse(self.engine.scene_review_enabled)
+        before = self.game_files()
+        with patch("novella_v2.scene_preflight.review_items",
+                   side_effect=AssertionError("Disabled review must not build a report")), \
+             patch("novella_v2.scene_preflight.layout_errors",
+                   side_effect=AssertionError("Disabled review must not check layout")):
+            p = self.packet()
+            self.assertFalse(p["scene_review_enabled"])
+            payload = json.loads((self.engine.root / self.sid / "system/packet.json").read_text())
+            self.assertFalse(payload["skin_builder"]["scene_review_enabled"])
+            self.assertNotIn("review_rule_ids", payload["skin_builder"])
+            self.assertNotIn("review_sections", payload["skin_builder"])
+            self.assertEqual(payload["skin_builder"]["content"], self.skin)
+            self.assertEqual(list(payload)[-1], "skin_builder")
+            result = self.engine.review_scene(self.sid, p["version"], p["packet_id"],
+                       "review-1", p["skin_sha256"], "Короткая сцена.", [], [])
+            self.assertTrue(result["skipped"])
+            self.assertFalse(result["approved"])
+            self.assertEqual(self.game_files(), before)
+            saved = self.save(p, "Короткая сцена.")
+            self.assertTrue(saved["saved"])
+            self.assertEqual(saved["turn"], 1)
+
+    def test_disabled_new_npc_still_requires_final_scene_evidence(self):
+        self.engine.scene_review_enabled = False
+        before = self.game_files()
+        p = self.npc_packet()
+        with self.assertRaisesRegex(EngineError, "exact excerpt"):
+            self.engine.commit(self.sid, self.npc_payload(p, "Маркус молчал."))
+        self.assertEqual(self.game_files(), before)
+        result = self.engine.commit(self.sid, self.npc_payload(p, "Маркус вошёл в комнату."))
+        self.assertTrue(result["saved"])
+        self.assertIn("characters/marcus.md", self.game_files())
+        self.engine.rollback(self.sid, result["version"], "review-1", "Отмена")
+        self.assertNotIn("characters/marcus.md", self.game_files())
+
+    def test_reenable_review_requires_fresh_packet_and_real_receipt(self):
+        self.engine.scene_review_enabled = False
+        old = self.packet()
+        with patch.dict("os.environ", {"CHATNOVELLA_V2_SCENE_REVIEW": "1"}):
+            self.engine = Engine(self.engine.root, self.instructions)
+        self.assertTrue(self.engine.scene_review_enabled)
+        with self.assertRaisesRegex(EngineError, "current review mode"):
+            self.save(old, scene())
+        fresh = self.packet()
+        self.assertNotEqual(fresh["packet_id"], old["packet_id"])
+        self.assertTrue(fresh["scene_review_enabled"])
+        with self.assertRaisesRegex(EngineError, "Review the exact final scene"):
+            self.save(fresh, scene())
+        self.assertTrue(self.review(fresh, scene())["approved"])
+        self.assertTrue(self.save(fresh, scene())["saved"])
+
+    def test_disabled_review_does_not_bypass_chunk_or_instruction_integrity(self):
+        self.engine.scene_review_enabled = False
+        self.engine.director_brief(self.sid)
+        p = self.engine.prepare(self.sid, "Привет", ["adrian"], request_id="review-1")
+        with self.assertRaisesRegex(EngineError, "Read and verify all"):
+            self.save(p, "Сцена.")
+        for index in p["unread_chunk_indices"]:
+            self.engine.read_chunk(self.sid, p["packet_id"], index)
+        self.builder.write_text(self.skin + "\nНовая версия.", encoding="utf-8")
+        with self.assertRaisesRegex(EngineError, "Refresh the active Skin Builder"):
+            self.save(p, "Сцена.")
+        self.assertEqual(self.engine.status(self.sid)["turn"], 0)
+
     def test_explicit_builder_version_binding(self):
         p = self.packet()
         self.builder.write_text(self.skin + "\nНовый пункт: проверять внимательнее.",
