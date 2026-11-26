@@ -110,6 +110,55 @@ class TestStoryHooks(unittest.TestCase):
         return story_hooks.parse(path.read_text(encoding="utf-8"),
                                  {"adrian", "seline"})
 
+    def test_invalid_legacy_hook_does_not_block_canon_and_can_be_repaired(self):
+        original = "Селин и Мэйв должны появиться на 90–120 ходу.\n"
+        names = {"seline": "Селин", "maeve": "Мэйв"}
+        source = original.strip()
+        arc = {"id": "arrivals", "title": "Появления", "status": "not_started",
+               "note": "Ожидаются два NPC", "source": source}
+        bad = hook("joint_arrival", "Общее появление", "appearance", source,
+                   arc_id="arrivals", participants=["seline", "maeve"],
+                   window_start=90, window_end=120)
+        created = self.engine.create(
+            original, [{"start": 0, "end": len(original), "target": "novel"}],
+            names, initial_threads=[arc], initial_hooks=[bad])
+        sid = created["session_id"]
+        self.assertIn("Track each timed NPC", created["story_memory_warnings"][0]["detail"])
+        self.assertEqual((self.engine.root / sid / "original.txt").read_text(
+            encoding="utf-8"), original)
+        self.assertEqual(self.saved_hooks(sid), [])
+        self.assertFalse(created["approved"])
+        self.engine.approve(sid, created["version"], created["canon_hash"], "Тест")
+        version = self.engine.status(sid)["version"]
+        added = self.engine.backfill_hooks(sid, version, [
+            {**hook(name + "_arrival", "Появление " + display, "appearance",
+                    source, arc_id="arrivals", participants=[name],
+                    window_start=90, window_end=120), "origin_turn": 0}
+            for name, display in names.items()])
+        self.assertEqual(added["added"], 2)
+        self.assertEqual(self.engine.status(sid)["canon_hash"], created["canon_hash"])
+        self.assertEqual(self.engine.status(sid)["turn"], 0)
+        self.assertEqual(len(self.saved_hooks(sid)), 2)
+
+    def test_new_setup_without_any_memory_can_initialize_after_approval(self):
+        created = self.engine.create(
+            CANON, [{"start": 0, "end": len(CANON), "target": "novel"}],
+            {"adrian": "Адриан", "seline": "Селин"})
+        sid = created["session_id"]
+        self.assertEqual(self.saved_hooks(sid), [])
+        self.assertNotIn("story_memory_warnings", created)
+        self.engine.approve(sid, created["version"], created["canon_hash"], "Тест")
+        result = self.engine.backfill_hooks(
+            sid, self.engine.status(sid)["version"],
+            [{**hook("seline_arrival", "Появление Селин", "appearance",
+                     APPEARANCE, participants=["seline"],
+                     window_start=90, window_end=120), "origin_turn": 0}],
+            [{"id": "rabbits", "title": "Появления", "status": "not_started",
+              "note": "Ожидается Селин", "source": APPEARANCE, "origin_turn": 0}])
+        self.assertTrue(result["updated"])
+        self.assertEqual(self.saved_hooks(sid)[0]["participants"], ["seline"])
+        self.assertEqual(self.engine.status(sid)["canon_hash"], created["canon_hash"])
+
     def test_seed_and_director_brief_before_participant_selection(self):
         sid = self.make()
         brief = self.engine.director_brief(sid)
