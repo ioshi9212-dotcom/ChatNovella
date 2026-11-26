@@ -138,7 +138,9 @@ class TestStoryHooks(unittest.TestCase):
         self.assertEqual(added["added"], 2)
         self.assertEqual(self.engine.status(sid)["canon_hash"], created["canon_hash"])
         self.assertEqual(self.engine.status(sid)["turn"], 0)
-        self.assertEqual(len(self.saved_hooks(sid)), 2)
+        rows = story_hooks.parse((self.engine.root / sid / "hooks.md").read_text(
+            encoding="utf-8"), set(names))
+        self.assertEqual({h["participants"][0] for h in rows}, set(names))
 
     def test_new_setup_without_any_memory_can_initialize_after_approval(self):
         created = self.engine.create(
