@@ -89,10 +89,12 @@ class TestOpenThreads(unittest.TestCase):
         self.assertEqual(lines[0]["turn"], 0)
 
     def test_initial_threads_require_exact_author_source(self):
-        with self.assertRaisesRegex(ThreadProblem, "appear in original"):
-            self._create([{"id": "letter", "title": "Пропавшее письмо",
-                           "status": "not_started", "note": "Будет раскрыто",
-                           "source": "Этого не существует в оригинале."}])
+        second = self._create([{"id": "letter", "title": "Пропавшее письмо",
+                               "status": "not_started", "note": "Будет раскрыто",
+                               "source": "Этого не существует в оригинале."}])
+        self.assertEqual(parse((self.engine.root / second / "open_threads.md")
+                               .read_text(encoding="utf-8")), [])
+        self.assertTrue((self.engine.root / second / "original.txt").exists())
 
     def test_new_thread_appears_every_subsequent_game_packet(self):
         self.commit(1, [self.update()])

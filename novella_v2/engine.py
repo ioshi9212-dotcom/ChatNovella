@@ -555,11 +555,27 @@ class Engine:
                 "".join(partitions["novel"]) + "\n" + cast_text + extra
         candidate_relations = validate_relations(
             relationships or {"npc_to_pov": {}, "npc_to_npc": {}}, set(names) - {"pov"})
-        initial_open_threads = open_threads.seed(initial_threads, original)
-        initial_hook_ledger = story_hooks.seed(initial_hooks, original,
-                                              set(names) - {"pov"})
-        story_hooks.validate_links(story_hooks.parse(initial_hook_ledger),
-                                   open_threads.parse(initial_open_threads))
+        # Plot memory is derived from canon, not a prerequisite for saving it.
+        # Keep valid legacy seeds for older clients; defer invalid ones explicitly.
+        story_memory_warnings = []
+        initial_open_threads = open_threads.HEADER
+        initial_hook_ledger = story_hooks.HEADER
+        try:
+            initial_open_threads = open_threads.seed(initial_threads, original)
+            open_threads.parse(initial_open_threads)
+        except (open_threads.ThreadProblem, TypeError, KeyError) as exc:
+            initial_open_threads = open_threads.HEADER
+            story_memory_warnings.append({"field": "initial_threads",
+                                          "detail": str(exc)})
+        try:
+            candidate_hooks = story_hooks.seed(initial_hooks, original,
+                                               set(names) - {"pov"})
+            story_hooks.validate_links(story_hooks.parse(candidate_hooks),
+                                       open_threads.parse(initial_open_threads))
+            initial_hook_ledger = candidate_hooks
+        except (story_hooks.HookProblem, TypeError, KeyError) as exc:
+            story_memory_warnings.append({"field": "initial_hooks",
+                                          "detail": str(exc)})
         sid = "NV2_" + secrets.token_hex(12)
         tmp = Path(tempfile.mkdtemp(prefix=".new-", dir=self.root))
         try:
@@ -591,7 +607,13 @@ class Engine:
                     "requests": {}, "last_undo": None}
             atomic(tmp / "system/meta.json", dump(meta))
             os.rename(tmp, self.root / sid)
-            return self.status(sid)
+            result = self.status(sid)
+            if story_memory_warnings:
+                result["story_memory_warnings"] = story_memory_warnings
+                result["story_memory_instruction"] = (
+                    "Canon saved. After approval, recover deferred story memory "
+                    "from original using backfill_v2_hooks; do not recreate the novel.")
+            return result
         except Exception:
             shutil.rmtree(tmp, ignore_errors=True)
             raise

@@ -97,9 +97,13 @@ chatnovella/, chatnovella_lite/ и прежние плагины в GitHub ос�
 - GET /v2/instructions/versions — **только контрольные суммы**, без текстов;
   необязательная проверка перед ручным обновлением.
 - POST /v2/novels — original, blocks, names, необязательные genre_answers,
-  relationships и initial_threads. Возвращает session_id и canon_hash.
-  У каждого initial_thread поля id/title/status/note/source; source —
-  дословная цитата из original.
+  relationships. Возвращает session_id и canon_hash.
+  initial_threads/initial_hooks — совместимость со старыми клиентами; новые
+  клиенты их не передают. Ошибочные старые предложения откладываются с
+  story_memory_warnings, а канон сохраняется.
+  После утверждения канона и до первой сцены заполнить память через
+  POST /v2/novels/{sid}/hooks/backfill (origin_turn=0, additions, arc_repairs,
+  expected_version), если в оригинале есть подтверждённые арки/крючки.
 - POST /{sid}/approve — expected_version, canon_hash, confirmation.
 - POST /{sid}/opening — expected_version, state, необязательные relationships.
 - POST /{sid}/characters — проверить временное предложение NPC (без записи).
