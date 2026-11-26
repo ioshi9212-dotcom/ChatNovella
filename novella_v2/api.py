@@ -50,9 +50,9 @@ def healthz():
 
 
 @app.get("/v2/instructions")
-def load_instructions():
+def load_instructions(rules_only: bool = False):
     """Full Rules + Skin Builder, explicitly once per chat or when asked."""
-    return store.load_instructions()
+    return store.load_instructions(rules_only)
 
 
 @app.get("/v2/instructions/versions")

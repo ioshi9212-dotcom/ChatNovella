@@ -61,9 +61,9 @@ def build_mcp(engine: Callable[[], Engine]) -> FastMCP:
             raise ToolError("INVALID_VALUE: Invalid V2 field value or type") from None
 
     @server.tool(annotations=read)
-    async def load_v2_instructions() -> dict[str, Any]:
-        """Read FULL Rules + author Skin Builder once per new chat or explicit refresh. Verify SHA-256. Never call every turn."""
-        return await call("load_instructions")
+    async def load_v2_instructions(rules_only: bool = False) -> dict[str, Any]:
+        """Use rules_only=true at chat bootstrap before the director. Full pair only for explicit inspection; turn packets always supply fresh Rules and Skin Builder."""
+        return await call("load_instructions", rules_only)
 
     @server.tool(annotations=read)
     async def get_v2_instruction_versions() -> dict[str, Any]:
@@ -158,15 +158,12 @@ def build_mcp(engine: Callable[[], Engine]) -> FastMCP:
 
     @server.tool(annotations=repeat)
     async def read_v2_chunk(session_id: SessionId, packet_id: str, index: int) -> dict[str, Any]:
-        """Read one UNREAD zero-based chunk and receipt. Verify its SHA-256 and joined packet hash; require all_chunks_read before commit."""
+        """Read next unread chunk in ascending order. Rules first, recent scenes, world facts, then the final Skin Builder block. Verify hashes; write only after all_chunks_read."""
         return await call("read_chunk", session_id, packet_id, index)
 
     @server.tool(annotations=read)
     async def get_v2_review_manifest() -> dict[str, Any]:
-        """Get each authored Skin Builder rule with stable line ID. Call once after
-        loading instructions or when the user explicitly refreshes them.
-        The model must evaluate EVERY rule, not just section names.
-        """
+        """Optional inspection; final turn chunks already contain current review section names and rule IDs. No extra manifest call in normal turn loading."""
         return await call("scene_review_manifest")
 
     @server.tool(annotations=repeat)

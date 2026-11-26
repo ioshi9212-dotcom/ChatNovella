@@ -678,8 +678,7 @@ class Engine:
         names.append("knowledge/pov.md")
         if (path / "characters/pov.md").exists():
             names.append("characters/pov.md")
-        # Rules and Skin Builder belong to the chat-scoped instruction read,
-        # never to a gameplay packet. A remote edit must not force re-reading.
+        # Instruction snapshots have separate version hashes in the packet.
         sources = [path / name for name in names]
         return [[str(p), sha256(p.read_bytes()).hexdigest()] for p in sources]
 
