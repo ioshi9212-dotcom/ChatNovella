@@ -282,6 +282,10 @@ class TestV2MCP(unittest.TestCase):
                              participants=["adrian"], kind="turn", request_id="mcp-turn-1")
         self.read(sid, prepared)
         turn = self.body(prepared)
+        # Literal dialogue on separate lines must not block save through MCP.
+        turn["narration"] = turn["narration"].replace("». Адриан", "».\n\nАдриан")
+        quote = "Ключ спрятан в красной книге».\n\nАдриан услышал её"
+        turn["knowledge"][0]["source"] = quote
         wrong = deepcopy(turn)
         wrong["knowledge"][0]["owner"] = "silas"
         rejected = self.rpc("tools/call", {"name": "save_v2_turn", "arguments": {

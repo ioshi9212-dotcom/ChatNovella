@@ -67,6 +67,21 @@ def dump(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
+def knowledge_marker(fact: str, source: str) -> str:
+    """Keep legacy one-line records; safely encode multiline literal evidence.
+
+    The full unmodified source also remains in the archived turn.
+    """
+    shown = source.strip()
+    if "\n" in source or "\r" in source:
+        shown = "JSON " + json.dumps(source, ensure_ascii=False)
+        # JSON escapes CR/LF and ASCII controls. Escape remaining Unicode
+        # line separators so a quotation cannot create a fake memory row.
+        for sep in ("\x85", "\u2028", "\u2029"):
+            shown = shown.replace(sep, "\\u%04x" % ord(sep))
+    return "- " + fact.strip() + " [источник: " + shown + "]"
+
+
 def digest(text: str) -> str:
     return sha256(text.encode("utf-8")).hexdigest()
 
@@ -1533,17 +1548,18 @@ class Engine:
                 need(owner == "pov" or (owner in cast and owner in used),
                      "KNOWLEDGE_OWNER", "Knowledge only for a loaded participant or POV")
                 need(isinstance(fact, str) and 0 < len(fact.strip()) <= 350 and
-                     isinstance(source, str) and 3 <= len(source) <= 400 and
-                     "\n" not in fact and "\r" not in fact and
-                     "\n" not in source and "\r" not in source and
-                     source in data["narration"], "KNOWLEDGE_SOURCE",
-                     "New fact must be single-line with an exact excerpt from the saved scene")
+                     "\n" not in fact and "\r" not in fact, "KNOWLEDGE_FACT",
+                     f"Knowledge fact for {owner} must be single-line (1–350 characters)")
+                need(isinstance(source, str) and 3 <= len(source) <= 400,
+                     "KNOWLEDGE_SOURCE", f"Knowledge source for {owner} must be 3–400 characters")
+                need(source in data["narration"], "KNOWLEDGE_SOURCE",
+                     f"Knowledge source for {owner} must be an exact excerpt from the saved scene")
                 filename = "knowledge/" + owner + ".md"
                 current = files.get(filename)
                 if current is None:
                     current = self._read(path, filename)
                     before[filename] = current
-                marker = "- " + fact.strip() + " [источник: " + source.strip() + "]"
+                marker = knowledge_marker(fact, source)
                 need(not any(row.startswith("- " + fact.strip() + " [источник:")
                              for row in current.splitlines()),
                      "KNOWLEDGE_DUPLICATE", "Fact already recorded for this character")
@@ -1817,8 +1833,7 @@ class Engine:
                     if filename not in existing_files:
                         existing_files[filename] = changes.get(
                             filename, self._read(path, filename))
-                    marker = ("- " + fact["fact"].strip() +
-                              " [источник: " + fact["source"].strip() + "]")
+                    marker = knowledge_marker(fact["fact"], fact["source"])
                     need(marker in existing_files[filename],
                          "AUDIT_MISSING_KNOWLEDGE",
                          "A previously saved personal fact disappeared from " + filename)

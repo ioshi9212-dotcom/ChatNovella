@@ -287,6 +287,41 @@ class TestV2Integrity(unittest.TestCase):
         with self.assertRaisesRegex(EngineError, "single-line"):
             self.engine.commit(self.sid, data)
 
+    def test_multiline_knowledge_source_is_exact_safe_and_survives_audit(self):
+        p, _ = self.packet()
+        quote = "— Ключ в шкафу.\r\n\n— Я понял."
+        fact = "Ключ находится в шкафу"
+        entry = {"owner": "adrian", "fact": fact, "source": quote}
+        data = self.turn(p, narration="Адриан слушал.\n" + quote,
+                         knowledge=[entry])
+        saved = self.engine.commit(self.sid, data)
+        self.assertTrue(saved["saved"])
+        memory = self.path("knowledge/adrian.md").read_text(encoding="utf-8")
+        self.assertIn("[источник: JSON " + json.dumps(quote, ensure_ascii=False) + "]", memory)
+        self.assertNotIn("\n— Я понял.", memory)
+        self.assertEqual(self.engine.history(self.sid)[0]["knowledge"], [entry])
+        self.assertEqual(self.engine.history(self.sid)[0]["narration"], data["narration"])
+        self.assertNotIn(fact, self.path("knowledge/silas.md").read_text(encoding="utf-8"))
+        # Use the same audit fixture as the existing integrity tests.
+        meta_path = self.path("system/meta.json")
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        meta["turn"], meta["audit_due"] = 15, 15
+        atomic(meta_path, dump(meta))
+        audit, _ = self.packet(kind="audit")
+        report = {key: "Проверено" for key in
+                  ("continuity", "state", "knowledge", "timeline", "relationships")}
+        self.assertTrue(self.engine.audit(self.sid, audit["version"], audit["packet_id"],
+                                         audit["chunk_hashes"], report)["audited"])
+
+    def test_multiline_knowledge_source_still_requires_exact_scene_quote(self):
+        p, _ = self.packet()
+        data = self.turn(p, narration="Адриан услышал.\nКлюч в шкафу.",
+                         knowledge=[{"owner": "adrian", "fact": "Ключ найден",
+                                     "source": "Адриан услышал.\nКлюч в кармане."}])
+        with self.assertRaisesRegex(EngineError, "exact excerpt"):
+            self.engine.commit(self.sid, data)
+        self.assertEqual(self.engine.status(self.sid)["turn"], 0)
+
     def test_multiline_timeline_injection_is_rejected(self):
         p, _ = self.packet()
         data = self.turn(p, events=[{
