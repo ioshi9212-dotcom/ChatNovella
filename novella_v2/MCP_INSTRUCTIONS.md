@@ -15,14 +15,22 @@ instruction_versions returns hashes only; refresh is not a game turn.
 
 For new setup, preserve the entire author's original verbatim. Assign all text
 exactly once with ordered unique anchors or contiguous Unicode ranges. Preserve
-English character IDs. Supply directed familiarity and only canon-supported
-initial relationships/threads AND every canon-supported initial_hooks item
-with its exact author quote, stable arc_id, independent ID and explicit
-window_start/window_end ONLY when stated literally in the source. Prepare
-kind=canon and read all chunks. Show the
-complete proposed questionnaire and obtain explicit approval of canon_hash
-before approve_v2_canon, opening, or any gameplay. A deployment acceptance test
-may approve its own clearly isolated synthetic test fixture, never a real game.
+English character IDs. Supply directed familiarity and canon-supported initial
+relationships. OMIT initial_threads and initial_hooks at creation; they are
+legacy inputs, not part of saving canon. Prepare kind=canon and read all chunks.
+Show the complete proposed questionnaire and obtain explicit approval of
+canon_hash before approve_v2_canon, opening, or any gameplay.
+After approval and before the first scene, initialize only real author-supported
+arcs and independent hooks via the existing backfill_v2_hooks tool (origin_turn=0,
+arc_repairs for missing arcs, exact source quotes, current expected_version).
+If there are none, skip the call. Never invent a deadline. If a literal author
+timing clause is not recognized by the numeric parser, retain it verbatim in
+the hook detail/source without numeric window fields; honor it in planning.
+For a multi-NPC deadline track each NPC separately. On a story-memory error,
+repair only that operation; the saved canon/session_id stays valid.
+If legacy create returns story_memory_warnings, continue with the saved session,
+not another create. A deployment acceptance test may approve its own clearly
+isolated synthetic test fixture, never a real game.
 
 STORY DIRECTOR / PERSISTENT HOOKS (MANDATORY):
 Before choosing participants or calling prepare_v2_context for a NEW game
@@ -75,7 +83,7 @@ facts or mandatory instant appearances. Review elapsed untracked author windows 
 and saved scenes; elapsed does not mean violated. Use historical backfill
 when asked. A blocked hook with a future in-world condition is not abandoned.
 
-For EXISTING sessions, hooks.md may legitimately be missing; do not wipe
+For EXISTING started sessions, hooks.md may legitimately be missing; do not wipe
 or automatically replace old history. When the reader explicitly requests
 plot-memory recovery, inspect original canon and actual saved history, then
 call backfill_v2_hooks with exact source snippets and origin_turn=0 for canon
