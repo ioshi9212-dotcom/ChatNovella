@@ -17,10 +17,12 @@ from mcp.types import ToolAnnotations
 from starlette.concurrency import run_in_threadpool
 
 from .engine import Engine, EngineError
+from .hooks import HookProblem
+from .threads import ThreadProblem
 from .mcp_models import (
-    AnchorBlock, AuditReport, Checksum, Correction, HistoricalArc, HistoricalHook, HookUpdate, StoryPlan, NewCharacterProposal,
+    AnchorBlock, AuditReport, Checksum, Correction, HistoricalArc, HistoricalHook, StoryPlan, NewCharacterProposal,
     RangeBlock, Relationships,
-    RequestId, ReviewCheck, RuleCheck, SessionId, State, ThreadUpdate, Turn, Version,
+    RequestId, ReviewCheck, RuleCheck, SessionId, State, Turn, Version,
 )
 
 
@@ -57,6 +59,10 @@ def build_mcp(engine: Callable[[], Engine]) -> FastMCP:
             return await run_in_threadpool(getattr(engine(), method), *args, **kwargs)
         except EngineError as exc:
             raise ToolError(f"{exc.code}: {exc}") from None
+        except HookProblem as exc:
+            raise ToolError(f"INVALID_HOOK: {exc}") from None
+        except ThreadProblem as exc:
+            raise ToolError(f"INVALID_THREAD: {exc}") from None
         except (ValueError, TypeError, KeyError):
             raise ToolError("INVALID_VALUE: Invalid V2 field value or type") from None
 
@@ -75,15 +81,17 @@ def build_mcp(engine: Callable[[], Engine]) -> FastMCP:
         original: str, blocks: list[AnchorBlock] | list[RangeBlock],
         names: dict[str, str], genre_answers: dict[str, str] | None = None,
         relationships: Relationships | None = None,
-        initial_threads: list[ThreadUpdate] | None = None,
-        initial_hooks: list[HookUpdate] | None = None,
+        initial_threads: Any = None,
+        initial_hooks: Any = None,
     ) -> dict[str, Any]:
-        """Create NEW NV2_ setup, preserving original verbatim and assigning every character once. Preview full canon before approval. Never migrate LITE_."""
+        """Save NEW NV2_ canon verbatim. Omit legacy initial_threads/initial_hooks:
+        initialize story memory with backfill_v2_hooks after canon approval.
+        Preview full canon before approval. Never migrate LITE_.
+        """
         return await call(
             "create", original, [b.model_dump() for b in blocks], names, genre_answers,
             relationships.model_dump() if relationships is not None else None,
-            [t.model_dump() for t in initial_threads] if initial_threads is not None else None,
-            [h.model_dump() for h in initial_hooks] if initial_hooks is not None else None,
+            initial_threads, initial_hooks,
         )
 
     @server.tool(annotations=read)
