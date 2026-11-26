@@ -381,13 +381,16 @@ class Engine:
         # read_text() normalizes CRLF: original author bytes must remain literal.
         return (path / name).read_bytes().decode("utf-8")
 
-    def load_instructions(self) -> dict:
-        """Full instruction text: fetch once per conversation or on explicit refresh.
+    def load_instructions(self, rules_only: bool = False) -> dict:
+        """Full instruction texts for explicit inspection, or rules-only bootstrap.
 
         This does not persist ChatGPT's chat memory. The client retains the
         returned text in its current conversation context.
         """
         rules = self._read(self.instructions, "rules.md")
+        if rules_only:
+            return {"rules": {"content": rules, "sha256": digest(rules), "chars": len(rules)},
+                    "refresh_policy": "rules_first_skin_last_per_turn"}
         skin = self._read(self.instructions, "skin_builder.md")
         return {
             "rules": {"content": rules, "sha256": digest(rules),
@@ -398,7 +401,7 @@ class Engine:
         }
 
     def instruction_versions(self) -> dict:
-        """Small explicit version check; full texts are never read in a turn."""
+        """Small explicit version check; no instruction texts in the response."""
         data = self.load_instructions()
         return {
             "rules_sha256": data["rules"]["sha256"],
@@ -696,6 +699,10 @@ class Engine:
                 "chunk_hashes": packet["hashes"], "sha256": packet["sha256"],
                 "participants": packet["participants"], "audit_due": audit_due,
                 "request_id": packet.get("request_id"),
+                 "instructions_mode": packet.get("instructions_mode"),
+                 "skin_chunk_start": packet.get("skin_chunk_start"),
+                 "rules_sha256": packet.get("rules_sha256"),
+                 "skin_sha256": packet.get("skin_sha256"),
                 "reused_pending_packet": reused,
                 "unread_chunk_indices": unread,
                 "next_chunk_index": unread[0] if unread else None,
@@ -948,6 +955,10 @@ class Engine:
                     relevant = cast
             need(relevant <= cast, "UNKNOWN_CHARACTER", "Character not registered in novel")
             signature = self._source_signature(path, relevant, kind)
+            rules = self._read(self.instructions, "rules.md")
+            skin = self._read(self.instructions, "skin_builder.md") if kind == "turn" else None
+            rules_sha = digest(rules)
+            skin_sha = digest(skin) if skin is not None else None
             pending = meta.get("packet")
             if kind == "turn":
                 if (story_plan is None and pending and pending.get("version") == meta["version"]
@@ -966,6 +977,9 @@ class Engine:
                  (kind != "turn" or pending.get("director_version") == meta["version"]) and
                  (kind != "audit" or "audit_story_ids" in pending) and
                 pending.get("source_signature") == signature and
+                 pending.get("instructions_mode") == "rules_first_skin_last_per_turn" and
+                 pending.get("rules_sha256") == rules_sha and
+                 pending.get("skin_sha256") == skin_sha and
                 pending.get("packet_stamp") == self._packet_stamp(path)):
                 return self._manifest(pending, meta["audit_due"], reused=True)
             if kind == "canon":
@@ -1045,10 +1059,15 @@ class Engine:
                 audit_ids = sorted({"hook:" + h["id"] for h in review_rows} |
                                    {"arc:" + a["id"] for a in arcs} |
                                    {w["id"] for w in audit_windows})
-            payload = dump({"kind": kind, "reader_text": reader_text,
-                            "audit_due": meta["audit_due"], "participants": sorted(relevant),
-                            "instructions_mode": "loaded_once_per_chat",
-                            "files": files, "recent_scenes": recent,
+            # Do not alphabetically sort this transport object: reading order matters.
+            ordered_recent = [{"turn": row["turn"], "reader_text": row["reader_text"],
+                               "narration": row["narration"], **row} for row in recent]
+            context = {"rules": {"sha256": rules_sha, "chars": len(rules), "content": rules},
+                       "recent_scenes": ordered_recent,
+                       "kind": kind, "reader_text": reader_text,
+                       "audit_due": meta["audit_due"], "participants": sorted(relevant),
+                       "instructions_mode": "rules_first_skin_last_per_turn",
+                       "files": files,
                             "story_plan": story_plan,
                             "resolved_outcomes": story_hooks.outcome_index(hook_rows)
                                 if kind == "turn" else [],
@@ -1062,8 +1081,24 @@ class Engine:
                                 "appearance_review_ids": plot_health["appearance_review"],
                                 "conditions_due_ids": plot_health["conditions_due"],
                                 "conditions_review_ids": plot_health["conditions_review"],
-                                "stale_hook_ids": plot_health["stale_hooks"]}})
-            content_chunks = chunks(payload)
+                                "stale_hook_ids": plot_health["stale_hooks"]}}
+            payload = json.dumps(context, ensure_ascii=False, separators=(",", ":"))
+            skin_chunk_start = None
+            if skin is not None:
+                # Start a dedicated final block; no world data follows artistic text.
+                prefix = payload[:-1]
+                final_section = ',"skin_builder":' + json.dumps({
+                    "sha256": skin_sha, "chars": len(skin), "empty": not bool(skin.strip()),
+                    "review_sections": scene_preflight.review_sections(skin),
+                    "review_rule_ids": [x["id"] for x in scene_preflight.review_items(skin)],
+                    "content": skin,
+                }, ensure_ascii=False, separators=(",", ":")) + "}"
+                content_chunks = chunks(prefix)
+                skin_chunk_start = len(content_chunks)
+                content_chunks.extend(chunks(final_section))
+                payload = prefix + final_section
+            else:
+                content_chunks = chunks(payload)
             offsets = []
             position = 0
             for piece in content_chunks:
@@ -1076,6 +1111,9 @@ class Engine:
                       "request_id": request_id, "source_signature": signature,
                       "director_version": meta["version"] if kind == "turn" else None,
                       "story_plan": story_plan, "audit_story_ids": audit_ids,
+                      "instructions_mode": "rules_first_skin_last_per_turn",
+                      "rules_sha256": rules_sha, "skin_sha256": skin_sha,
+                      "skin_chunk_start": skin_chunk_start,
                       "hashes": [digest(c) for c in content_chunks], "received": [],
                       "offsets": offsets, "sha256": digest(payload)}
             atomic(path / "system/packet.json", payload)
@@ -1091,6 +1129,14 @@ class Engine:
                  "Prepare fresh context only if this packet actually expired")
             need(type(index) is int and 0 <= index < len(packet["offsets"]),
                  "CHUNK_INDEX", "Invalid chunk index")
+            need(packet.get("instructions_mode") == "rules_first_skin_last_per_turn",
+                 "PACKET_EXPIRED", "Prepare fresh context in the new reading order")
+            unread_before = [i for i in range(len(packet["hashes"])) if i not in packet["received"]]
+            need(index in packet["received"] or (unread_before and index == unread_before[0]),
+                 "CHUNK_ORDER", "Read the next unread chunk in order; Skin Builder is last")
+            if index == packet.get("skin_chunk_start"):
+                need(digest(self._read(self.instructions, "skin_builder.md")) == packet["skin_sha256"],
+                     "SKIN_VERSION_CHANGED", "Skin Builder changed; prepare fresh context")
             offset, length = packet["offsets"][index]
             with (path / "system/packet.json").open("rb") as handle:
                 handle.seek(offset)
@@ -1105,6 +1151,8 @@ class Engine:
             unread = [i for i in range(len(packet["hashes"]))
                       if i not in packet["received"]]
             return {"index": index, "content": fragment,
+                     "phase": ("skin_builder" if packet.get("skin_chunk_start") is not None
+                               and index >= packet["skin_chunk_start"] else "context"),
                     "sha256": packet["hashes"][index],
                     "chunk_count": len(packet["hashes"]), "packet_id": packet_id,
                     "next_chunk_index": unread[0] if unread else None,
@@ -1117,6 +1165,8 @@ class Engine:
         need(p is not None and p["id"] == packet_id and
              p["version"] == meta["version"] and p["kind"] == kind,
              "PACKET_EXPIRED", "Use the current prepared context")
+        need(p.get("instructions_mode") == "rules_first_skin_last_per_turn",
+             "PACKET_EXPIRED", "Prepare fresh context in the new reading order")
         need(hashes == p["hashes"] and
              set(p["received"]) == set(range(len(p["hashes"]))),
              "PACKET_INCOMPLETE", "Read and verify all 36000-character chunks")
@@ -1161,8 +1211,10 @@ class Engine:
                  "SCENE_TEXT", "Review requires the complete scene")
             skin = self._read(self.instructions, "skin_builder.md")
             actual_sha = digest(skin)
-            need(skin_sha256 == actual_sha, "SKIN_VERSION_CHANGED",
-                 "Refresh the active Skin Builder; never validate with an older edition")
+            need(skin_sha256 == actual_sha == packet.get("skin_sha256"), "SKIN_VERSION_CHANGED",
+                 "Refresh the active Skin Builder: prepare and read the fresh packet")
+            need(digest(self._read(self.instructions, "rules.md")) == packet.get("rules_sha256"),
+                 "RULES_VERSION_CHANGED", "Rules changed; prepare and read the fresh packet")
             sections = scene_preflight.review_sections(skin)
             problems = (scene_preflight.layout_errors(skin, narration, meta["turn"] + 1)
                         + scene_preflight.report_errors(skin, checks)
@@ -1230,6 +1282,10 @@ class Engine:
             # Full authored Skin Builder review is a mandatory pre-save gate.
             # Synthetic fixtures without an authored format remain compatible.
             skin = self._read(self.instructions, "skin_builder.md")
+            need(digest(skin) == packet.get("skin_sha256"), "SKIN_VERSION_CHANGED",
+                 "Refresh the active Skin Builder: prepare and read the fresh packet")
+            need(digest(self._read(self.instructions, "rules.md")) == packet.get("rules_sha256"),
+                 "RULES_VERSION_CHANGED", "Rules changed; prepare and read the fresh packet")
             if scene_preflight.is_formatted_builder(skin):
                 receipt = meta.get("scene_review") or {}
                 need(receipt.get("request_id") == req
@@ -1474,6 +1530,8 @@ class Engine:
             need(packet.get("packet_stamp") == self._packet_stamp(path),
                  "PACKET_CHANGED", "Prepared audit context bytes changed")
             need(meta["audit_due"] in (15, 60), "AUDIT_NOT_DUE", "No audit due")
+            need(digest(self._read(self.instructions, "rules.md")) == packet.get("rules_sha256"),
+                 "RULES_VERSION_CHANGED", "Rules changed; prepare and read the fresh audit packet")
             required = {"continuity", "state", "knowledge", "timeline", "relationships"}
             if meta["audit_due"] == 60:
                 required |= {"long_term"}
