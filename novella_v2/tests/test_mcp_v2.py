@@ -12,12 +12,14 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 import novella_v2.api as api
+from novella_v2.tests.test_story_hooks import fixture_plan
 from novella_v2.engine import Engine, empty_actor
 
 
 TOOLS = {
     "load_v2_instructions", "get_v2_instruction_versions", "create_v2_novel",
     "get_v2_status", "approve_v2_canon", "set_v2_opening", "add_v2_character",
+    "get_v2_director_brief", "backfill_v2_hooks",
     "get_v2_review_manifest",
     "prepare_v2_context", "read_v2_chunk", "review_v2_scene",
     "save_v2_turn", "finish_v2_audit",
@@ -61,6 +63,9 @@ class TestV2MCP(unittest.TestCase):
         return value["result"]
 
     def tool(self, tool_name, **arguments):
+        if tool_name == "prepare_v2_context" and arguments.get("kind") == "turn":
+            brief = self.tool("get_v2_director_brief", session_id=arguments["session_id"])
+            arguments.setdefault("story_plan", fixture_plan(brief))
         result = self.rpc("tools/call", {"name": tool_name, "arguments": arguments})
         self.assertFalse(result.get("isError"), result)
         return result["structuredContent"]
@@ -166,6 +171,35 @@ class TestV2MCP(unittest.TestCase):
             **self.headers, "Host": "untrusted.example"})
         self.assertEqual(hostile.status_code, 421)
 
+    def test_director_and_evidence_only_hook_backfill_via_mcp(self):
+        sid = self.start()
+        original = self.tool("get_v2_director_brief", session_id=sid)
+        self.assertTrue(original["empty_ledger"])
+        self.assertIn("open_arcs", original)
+        self.assertIn("cast", original)
+        version = self.tool("get_v2_status", session_id=sid)["version"]
+        migrated = self.tool("backfill_v2_hooks", session_id=sid,
+                             expected_version=version, additions=[{
+                                 "id": "missing_key_hook", "arc_id": "missing_key",
+                                 "title": "Пропавший ключ", "kind": "mystery",
+                                 "status": "open",
+                                 "detail": "Неизвестно, кто забрал ключ из шкафа",
+                                 "participants": ["adrian"],
+                                 "source": "Пропал ключ от шкафа.",
+                                 "origin_turn": 0,
+                             }])
+        self.assertTrue(migrated["updated"])
+        brief = self.tool("get_v2_director_brief", session_id=sid)
+        self.assertEqual(brief["unresolved_hooks"][0]["id"], "missing_key_hook")
+        self.assertFalse(brief["empty_ledger"])
+        packet = self.tool("prepare_v2_context", session_id=sid,
+                           reader_text="Смотрю на шкаф",
+                           participants=["adrian"], kind="turn",
+                           request_id="mcp-hook-inspection")
+        files = self.read(sid, packet)
+        self.assertIn("hooks.md", files)
+        self.assertIn("missing_key_hook", files["hooks.md"])
+
     def test_instructions_hashes_and_author_skin_unchanged(self):
         instructions = self.tool("load_v2_instructions")
         for name in ("rules", "skin_builder"):
@@ -261,7 +295,9 @@ class TestV2MCP(unittest.TestCase):
                           name="marcus", display="Маркус", established_text="Маркус вошёл и назвался.")
         self.assertGreater(added["version"], status["version"])
         for number in range(1, 16):
-            packet = self.engine.prepare(sid, str(number), ["adrian"], "turn", f"audit-seed-{number}")
+            brief = self.engine.director_brief(sid)
+            packet = self.engine.prepare(sid, str(number), ["adrian"], "turn", f"audit-seed-{number}",
+                                         story_plan=fixture_plan(brief))
             for index in packet["unread_chunk_indices"]:
                 self.engine.read_chunk(sid, packet["packet_id"], index)
             self.engine.commit(sid, {
@@ -281,8 +317,9 @@ class TestV2MCP(unittest.TestCase):
         self.read(sid, packet)
         finished = self.tool("finish_v2_audit", session_id=sid, expected_version=packet["version"],
                              packet_id=packet["packet_id"], chunk_hashes=packet["chunk_hashes"],
-                             report={key: "Сверено по полным сценам" for key in (
+                             report={**{key: "Сверено по полным сценам" for key in (
                                  "continuity", "state", "knowledge", "timeline", "relationships")},
+                                 "story": {"arc:missing_key": "Тайна ключа остаётся открытой."}},
                              corrections={})
         self.assertTrue(finished["audited"])
         self.assertEqual(self.tool("get_v2_status", session_id=sid)["audit_due"], 0)

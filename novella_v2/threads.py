@@ -8,7 +8,7 @@ from __future__ import annotations
 import re
 
 HEADER = "# Незавершённые линии\n"
-MAX_OPEN = 48
+MAX_OPEN = 512  # protective capacity, not a plot quota
 ID = re.compile(r"^[a-z][a-z0-9_]{1,49}$")
 ROW = re.compile(r"^- \[(не началась|активна)\] ([a-z][a-z0-9_]{1,49}) \| (.+) \| (.+) \| ход ([0-9]{1,8})$")
 DISPLAY = {"not_started": "не началась", "active": "активна"}
@@ -48,7 +48,7 @@ def _entry(item: dict) -> dict:
 
 def render(items: list[dict]) -> str:
     _check(isinstance(items, list) and len(items) <= MAX_OPEN,
-           "Too many unresolved story threads: merge related threads")
+           "Too many unresolved story threads: preserve entries and request maintenance")
     clean = [_entry(item) for item in items]
     _check(len({row["id"] for row in clean}) == len(clean),
            "Duplicate thread id")
@@ -87,6 +87,36 @@ def seed(items: list[dict] | None, original: str) -> str:
         initial.append(_entry({k: v for k, v in item.items() if k != "source"} |
                               {"turn": 0}))
     return render(initial)
+
+
+def backfill(text: str, additions: list[dict], original: str,
+             scenes: dict[int, str], current_turn: int) -> str:
+    """Restore explicitly identified arcs from real historical evidence only."""
+    current = {row["id"]: row for row in parse(text)}
+    _check(isinstance(additions, list) and len(additions) <= MAX_OPEN,
+           "Invalid historical arc repairs")
+    seen = set()
+    for item in additions:
+        _check(isinstance(item, dict) and set(item) ==
+               {"id", "title", "status", "note", "source", "origin_turn"},
+               "Arc repair needs id/title/status/note/source/origin_turn")
+        turn = item["origin_turn"]
+        _check(type(turn) is int and 0 <= turn <= current_turn,
+               "Invalid historical arc source turn")
+        quote = _short(item["source"], 350, "Historical arc source")
+        _check(len(quote) >= 8 and quote in (original if turn == 0 else scenes.get(turn, "")),
+               "Historical arc needs exact original or saved-scene evidence")
+        entry = _entry({k: v for k, v in item.items()
+                        if k not in {"source", "origin_turn"}} | {"turn": turn})
+        ident = entry["id"]
+        _check(ident not in seen, "Duplicate historical arc repair")
+        seen.add(ident)
+        if ident in current:
+            _check(current[ident]["title"] == entry["title"],
+                   "Existing arc must preserve its title")
+        else:
+            current[ident] = entry
+    return render(list(current.values()))
 
 
 def apply(text: str, updates: list[dict], narration: str, turn: int) -> tuple[str, list[dict]]:

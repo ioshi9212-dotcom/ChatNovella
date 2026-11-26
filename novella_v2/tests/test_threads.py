@@ -7,6 +7,7 @@ from tempfile import TemporaryDirectory
 import unittest
 
 from novella_v2.engine import Engine, EngineError, empty_actor, digest
+from novella_v2.tests.test_story_hooks import fixture_plan
 from novella_v2.threads import HEADER, MAX_OPEN, ThreadProblem, parse, render, seed, apply
 
 
@@ -43,7 +44,8 @@ class TestOpenThreads(unittest.TestCase):
         return self.engine.root / self.sid / name
 
     def prepared(self, text="Читаю письмо", kind="turn"):
-        packet = self.engine.prepare(self.sid, text, ["adrian"], kind)
+        plan = fixture_plan(self.engine.director_brief(self.sid)) if kind == "turn" else None
+        packet = self.engine.prepare(self.sid, text, ["adrian"], kind, story_plan=plan)
         raw = "".join(self.engine.read_chunk(self.sid, packet["packet_id"], i)["content"]
                       for i in range(packet["chunk_count"]))
         self.assertEqual(digest(raw), packet["sha256"])
@@ -205,6 +207,7 @@ class TestOpenThreads(unittest.TestCase):
         self.assertIn("Пропавшее письмо", context["files"]["open_threads.md"])
         report = {key: "Проверено" for key in
                   ("continuity", "state", "knowledge", "timeline", "relationships")}
+        report["story"] = {"arc:missing_letter": "Письмо остаётся не найденным, линия активна."}
         self.engine.audit(self.sid, p["version"], p["packet_id"], p["chunk_hashes"], report)
         self.assertEqual(len(parse(self.path("open_threads.md").read_text(encoding="utf-8"))), 1)
 

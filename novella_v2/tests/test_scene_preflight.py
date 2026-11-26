@@ -68,6 +68,7 @@ class TestSceneReview(unittest.TestCase):
                                 state(0))
 
     def packet(self):
+        self.engine.director_brief(self.sid)
         p = self.engine.prepare(self.sid, "Привет", ["adrian"], request_id="review-1")
         for index in p["unread_chunk_indices"]:
             self.engine.read_chunk(self.sid, p["packet_id"], index)

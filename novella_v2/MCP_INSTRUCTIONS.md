@@ -14,13 +14,84 @@ it empty. Rules describe mechanics; they must not dictate literary style.
 For new setup, preserve the entire author's original verbatim. Assign all text
 exactly once with ordered unique anchors or contiguous Unicode ranges. Preserve
 English character IDs. Supply directed familiarity and only canon-supported
-initial relationships/threads. Prepare kind=canon and read all chunks. Show the
+initial relationships/threads AND every canon-supported initial_hooks item
+with its exact author quote, stable arc_id, independent ID and explicit
+window_start/window_end ONLY when stated literally in the source. Prepare
+kind=canon and read all chunks. Show the
 complete proposed questionnaire and obtain explicit approval of canon_hash
 before approve_v2_canon, opening, or any gameplay. A deployment acceptance test
 may approve its own clearly isolated synthetic test fixture, never a real game.
 
-For each new turn choose one stable request_id. Call prepare_v2_context with
-that ID, exact reader_text and real participants. If already_committed_duplicate
+STORY DIRECTOR / PERSISTENT HOOKS (MANDATORY):
+Before choosing participants or calling prepare_v2_context for a NEW game
+turn, first call get_v2_director_brief(session_id). Read EVERY open arc and
+EVERY individual unresolved hook, promise, mystery, consequence, NPC goal,
+genre thread and explicit author appearance window. The server records a
+version-bound receipt and rejects prepare without it, even for an empty ledger.
+This brief
+does NOT move time, mutate the world, or grant facts to POV/NPC. The source
+of an author deadline is the original canon, never an invented timer or
+rotation scheme. Author-specified arrival windows take precedence over the
+generic no-NPC-schedule guidance. If an authored deadline is already missed,
+report it; NEVER retroactively invent or rewrite scenes to pretend compliance.
+
+Use the brief + reader's input + current scene to decide participants; load
+FULL character cards for every genuinely participating NPC with prepare.
+For entering characters not already prepared, reprepare once and read the
+new packet. A director-only actor who acts OFFSCREEN is not automatically
+POV knowledge, and cannot receive personal knowledge without validated
+scene access.
+
+Each open question must retain its own stable ID in hooks.md; open_threads.md
+is the concise arc index, NOT a replacement for persistent mystery details.
+Use hook_updates in save_v2_turn only when a hook was truly introduced,
+progressed, blocked or resolved, with a literal quote from the FINAL scene.
+Updating one hook must NEVER erase any sibling hook or NPC objective.
+A closed hook remains stored with its specific outcome and exact evidence.
+A literal quote alone does NOT prove the stated outcome; audit its meaning.
+Do not return resolved obligations to the overdue list. Track each timed NPC
+appearance separately. Recorded participation is evidence to inspect, not
+a guarantee of the intended debut.
+Offscreen events must actually be narrated to count; do not invent unseen
+progress and claim it happened.
+
+The director brief also extracts literal author timing clauses from
+original.txt as author_window_candidates even when an older session has no
+hooks.md yet. These are SOURCE-QUOTED HINTS, not automatically persisted
+facts or mandatory instant appearances. Review elapsed untracked author windows against first recorded participation
+and saved scenes; elapsed does not mean violated. Use historical backfill
+when asked. A blocked hook with a future in-world condition is not abandoned.
+
+For EXISTING sessions, hooks.md may legitimately be missing; do not wipe
+or automatically replace old history. When the reader explicitly requests
+plot-memory recovery, inspect original canon and actual saved history, then
+call backfill_v2_hooks with exact source snippets and origin_turn=0 for canon
+or the actual saved scene number. Provide independent last_turn and last_evidence
+for later confirmed development. Historical fulfillment uses status=closed and
+actual completion evidence. For an existing open hook use reconcile=true;
+for a mistaken closure use reopen=true with the original identity and evidence.
+Never fabricate evidence, invent deadlines, change original canon, or cite the
+still-rollbackable last turn. Backfill survives a later rollback. This action
+changes session version; call director again and reprepare afterward.
+
+At the 15/60 audit, report.story must cover EXACTLY audit_story_ids from
+the packet: every live hook, open arc, author window, current consequences
+and a rotating sample of old closures at 60. Server checks all ledger
+records and archive evidence at every audit. Do not claim semantic proof
+from a literal quote alone. Preserve user choices and storyline pace.
+
+For each new turn choose one stable request_id. After the director brief,
+provide story_plan to prepare_v2_context: focus_ids (known arc:/hook:/window:
+IDs, may be empty), direction, world, deferred (short concrete reasoning),
+priority (map every plan_priority_ids ID to an actual decision or grounded
+reason to defer). Required when plot records/windows exist; recommended even
+when empty. Plan is not an event; never force an encounter or progress quota.
+Use trigger date:YYYY-MM-DD, turn:N, hook:ID for known waiting conditions,
+otherwise text. Due does not mean forced. Closed results remain in
+resolved_hooks of the director brief and resolved_outcomes of the turn packet. Record actual consequences as separate hooks. Every open
+hook needs an existing open arc; repair missing arcs with explicit historical
+arc_repairs (id,title,status,note,source,origin_turn) in backfill_v2_hooks.
+Call prepare_v2_context with that ID, exact reader_text and real participants. If already_committed_duplicate
 is true, return its saved narration without generating or saving another turn.
 If reused_pending_packet is true, continue that packet and read ONLY its
 unread_chunk_indices. Retain session_id, request_id, packet_id and read progress.

@@ -49,6 +49,7 @@ class TestChatInstructions(unittest.TestCase):
                                 scene_state(0))
 
     def packet(self, request_id="chat-1"):
+        self.engine.director_brief(self.sid)
         return self.engine.prepare(
             self.sid, "Привет", ["adrian"], request_id=request_id)
 

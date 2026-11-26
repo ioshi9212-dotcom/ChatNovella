@@ -47,6 +47,7 @@ class TestSmallGuards(unittest.TestCase):
         return self.engine.root / self.sid / name
 
     def prepare(self, reader="Привет", request_id="req-1"):
+        self.engine.director_brief(self.sid)
         return self.engine.prepare(self.sid, reader_text=reader,
                                    participants=["adrian"], request_id=request_id)
 
@@ -91,6 +92,7 @@ class TestSmallGuards(unittest.TestCase):
         sid = new["session_id"]
         self.engine.approve(sid, new["version"], new["canon_hash"], "Утверждаю")
         self.engine.set_opening(sid, self.engine.status(sid)["version"], state(0))
+        self.engine.director_brief(sid)
         first = self.engine.prepare(sid, "Hi", ["adrian"], request_id="large-1")
         self.assertGreater(first["chunk_count"], 2)
         part0 = self.engine.read_chunk(sid, first["packet_id"], 0)

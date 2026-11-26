@@ -18,7 +18,8 @@ from starlette.concurrency import run_in_threadpool
 
 from .engine import Engine, EngineError
 from .mcp_models import (
-    AnchorBlock, AuditReport, Checksum, Correction, RangeBlock, Relationships,
+    AnchorBlock, AuditReport, Checksum, Correction, HistoricalArc, HistoricalHook, HookUpdate, StoryPlan,
+    RangeBlock, Relationships,
     RequestId, ReviewCheck, RuleCheck, SessionId, State, ThreadUpdate, Turn, Version,
 )
 
@@ -75,12 +76,14 @@ def build_mcp(engine: Callable[[], Engine]) -> FastMCP:
         names: dict[str, str], genre_answers: dict[str, str] | None = None,
         relationships: Relationships | None = None,
         initial_threads: list[ThreadUpdate] | None = None,
+        initial_hooks: list[HookUpdate] | None = None,
     ) -> dict[str, Any]:
         """Create NEW NV2_ setup, preserving original verbatim and assigning every character once. Preview full canon before approval. Never migrate LITE_."""
         return await call(
             "create", original, [b.model_dump() for b in blocks], names, genre_answers,
             relationships.model_dump() if relationships is not None else None,
             [t.model_dump() for t in initial_threads] if initial_threads is not None else None,
+            [h.model_dump() for h in initial_hooks] if initial_hooks is not None else None,
         )
 
     @server.tool(annotations=read)
@@ -114,12 +117,44 @@ def build_mcp(engine: Callable[[], Engine]) -> FastMCP:
         return await call("add_character", session_id, expected_version, name, display, established_text)
 
     @server.tool(annotations=repeat)
+    async def get_v2_director_brief(session_id: SessionId) -> dict[str, Any]:
+        """MANDATORY BEFORE selecting participants for a new scene: read ALL
+        open arcs, independent unsolved hooks, explicit author appearance windows,
+        NPC goals and full cast IDs. This is director-only, not NPC knowledge.
+        Do not automatically force encounters, reveal hidden lore or invent events.
+        """
+        return await call("director_brief", session_id)
+
+    @server.tool(annotations=write)
+    async def backfill_v2_hooks(
+        session_id: SessionId, expected_version: Version,
+        additions: list[HistoricalHook], arc_repairs: list[HistoricalArc] | None = None,
+    ) -> dict[str, Any]:
+        """One-off safe existing-session story-memory backfill. Each hook MUST
+        quote the original author text (origin_turn=0) or a real archived scene.
+        Does not rewrite scenes, canon or relationships. Explicit arc_repairs can restore
+        missing open arcs with archived evidence; use stable existing arc IDs.
+        Supply origin_turn and optional last_turn/last_evidence separately.
+        Reopen an incorrectly closed hook with reopen=true and the same identity.
+        Reconcile an existing open hook with historical closure using reconcile=true.
+        The latest turn cannot be used while rollback is possible.
+        """
+        return await call("backfill_hooks", session_id, expected_version,
+                          [h.model_dump() for h in additions],
+                          [a.model_dump() for a in (arc_repairs or [])])
+
+    @server.tool(annotations=repeat)
     async def prepare_v2_context(
         session_id: SessionId, reader_text: str, participants: list[str],
         kind: Literal["turn", "audit", "canon"], request_id: RequestId,
+        story_plan: StoryPlan | None = None,
     ) -> dict[str, Any]:
-        """Keep one request_id per turn. Replay saved duplicates; resume only unread chunks. Every packet includes full relationships and open_threads, not Rules/Skin."""
-        return await call("prepare", session_id, reader_text, participants, kind, request_id)
+        """Use director first, then provide a short story_plan for plot-bearing turns.
+        focus_ids are known arc:/hook:/window: IDs; direction, world, deferred explain
+        the choice; priority maps exact plan_priority_ids to decisions. No quotas.
+        Keep request_id and plan on retries. No plan for canon/audit."""
+        return await call("prepare", session_id, reader_text, participants, kind, request_id,
+                          story_plan.model_dump() if story_plan is not None else None)
 
     @server.tool(annotations=repeat)
     async def read_v2_chunk(session_id: SessionId, packet_id: str, index: int) -> dict[str, Any]:
@@ -154,7 +189,8 @@ def build_mcp(engine: Callable[[], Engine]) -> FastMCP:
 
     @server.tool(annotations=repeat)
     async def save_v2_turn(session_id: SessionId, turn: Turn) -> dict[str, Any]:
-        """Atomically commit the SAME request_id/packet/hashes/input. Save only evidenced personal knowledge, real relationship/arc changes. Publish only after saved=true."""
+        """Atomically save scene plus independent evidence-backed hook_updates. Never
+        erase old unresolved hooks when advancing another one. Publish only after saved=true."""
         return await call("commit", session_id, turn.model_dump(exclude_unset=True))
 
     @server.tool(annotations=write)

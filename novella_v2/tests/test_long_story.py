@@ -72,6 +72,7 @@ class TestLongStory(unittest.TestCase):
                 if n >= 61:
                     people.append("marcus")
                     scene += "**Маркус** — Я здесь.\n"
+                engine.director_brief(sid)
                 prep = engine.prepare(sid, reader, people)
                 parts = []
                 for j in range(prep["chunk_count"]):
@@ -137,6 +138,7 @@ class TestLongStory(unittest.TestCase):
                 self.assertEqual(saved["turn"], n)
                 if n == 91:
                     engine.rollback(sid, saved["version"], request_id, "Исправление сцены")
+                    engine.director_brief(sid)
                     fixed = engine.prepare(sid, reader, people)
                     for j in range(fixed["chunk_count"]):
                         engine.read_chunk(sid, fixed["packet_id"], j)

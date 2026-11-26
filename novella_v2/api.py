@@ -67,7 +67,8 @@ def create(body: dict):
         original=body["original"], blocks=body["blocks"],
         names=body["names"], genre_answers=body.get("genre_answers"),
         relationships=body.get("relationships"),
-        initial_threads=body.get("initial_threads"))
+        initial_threads=body.get("initial_threads"),
+        initial_hooks=body.get("initial_hooks"))
 
 
 @app.get("/v2/novels/{sid}")
@@ -93,12 +94,24 @@ def add_character(sid: str, body: dict):
                                body["display"], body["established_text"])
 
 
+@app.get("/v2/novels/{sid}/director")
+def director(sid: str):
+    """Read director-only open obligations BEFORE choosing participants."""
+    return store.director_brief(sid)
+
+
+@app.post("/v2/novels/{sid}/hooks/backfill")
+def hooks_backfill(sid: str, body: dict):
+    return store.backfill_hooks(
+        sid, body["expected_version"], body["additions"], body.get("arc_repairs"))
+
+
 @app.post("/v2/novels/{sid}/prepare")
 def prepare(sid: str, body: dict):
     return store.prepare(sid, reader_text=body.get("reader_text", ""),
                          participants=body.get("participants", []),
                          kind=body.get("kind", "turn"),
-                         request_id=body.get("request_id"))
+                         request_id=body.get("request_id"), story_plan=body.get("story_plan"))
 
 
 @app.get("/v2/novels/{sid}/chunks/{packet_id}/{index}")
