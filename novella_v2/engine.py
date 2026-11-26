@@ -1291,7 +1291,8 @@ class Engine:
                     "reader_text", "narration", "participants", "state",
                     "knowledge", "events", "relations"}
         need(isinstance(data, dict) and required <= set(data) and
-             set(data) <= required | {"thread_updates", "hook_updates", "scene_access"},
+             set(data) <= required | {"thread_updates", "hook_updates", "scene_access",
+                                       "new_character_evidence"},
              "TURN_FIELDS", "Turn payload has fixed storage fields")
         req = data["request_id"]
         need(isinstance(req, str) and 1 <= len(req) <= 100, "REQUEST_ID", "Invalid request id")
@@ -1360,7 +1361,14 @@ class Engine:
             need(isinstance(data["narration"], str) and bool(data["narration"].strip())
                  and len(data["narration"]) <= 120_000, "SCENE_TEXT", "Invalid full scene")
             # Persist only proposals actually used in the approved final scene.
-            new_npcs = {name: row for name, row in proposals.items() if name in used}
+            new_npcs = {name: dict(row) for name, row in proposals.items() if name in used}
+            final_evidence = data.get("new_character_evidence", {})
+            need(isinstance(final_evidence, dict) and set(final_evidence) <= set(new_npcs)
+                 and all(isinstance(quote, str) and 8 <= len(quote.strip()) <= 4000
+                         for quote in final_evidence.values()),
+                 "CHARACTER_SOURCE", "Final NPC evidence belongs only to used temporary NPCs")
+            for name, quote in final_evidence.items():
+                new_npcs[name]["established_text"] = quote
             need(all(row["established_text"] in data["narration"] for row in new_npcs.values()),
                  "CHARACTER_SOURCE", "New NPC card requires an exact excerpt from the final approved scene")
             cast = registered_cast | set(new_npcs)

@@ -155,7 +155,8 @@ def build_mcp(engine: Callable[[], Engine]) -> FastMCP:
         the choice; priority maps exact plan_priority_ids to decisions. No quotas.
         Keep request_id and plan on retries. New NPCs use new_characters (name, display,
         established_text: planned exact scene excerpt). These are temporary until
-        reviewed commit. No proposals or plan for canon/audit."""
+        reviewed commit. If the excerpt changes, save_v2_turn.new_character_evidence
+        can provide the final quote. No proposals or plan for canon/audit."""
         return await call("prepare", session_id, reader_text, participants, kind, request_id,
                           story_plan.model_dump() if story_plan is not None else None,
                           [row.model_dump() for row in new_characters] if new_characters is not None else None)

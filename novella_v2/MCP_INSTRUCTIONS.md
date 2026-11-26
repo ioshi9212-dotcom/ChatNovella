@@ -45,7 +45,9 @@ the new packet. For genuinely new NPCs, pass new_characters to prepare:
 scene excerpt). add_v2_character is validation only; it returns a proposal,
 not a registered character. Proposals live in the current packet only,
 not in canon, state or knowledge files. If the final draft changes the
-excerpt, reprepare with the corrected proposal and review again. Only
+excerpt, pass the exact final quote in save_v2_turn.new_character_evidence
+(mapping staged NPC ID to quote). No reprepare solely for a changed quote
+if the NPC identity and participants are unchanged. Only
 approved final narration with the exact excerpt and actual participation
 registers a new NPC in the same commit as all game changes. Unused proposals
 are discarded. Rollback of that turn removes its new NPC documents and cast

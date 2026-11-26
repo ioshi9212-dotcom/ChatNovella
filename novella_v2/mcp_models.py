@@ -172,6 +172,7 @@ class Turn(Model):
     thread_updates: list[ThreadUpdate] = Field(default_factory=list)
     hook_updates: list[HookUpdate] = Field(default_factory=list)
     scene_access: list[SceneAccess] = Field(default_factory=list)
+    new_character_evidence: dict[str, Annotated[str, Field(min_length=8, max_length=4000)]] = Field(default_factory=dict)
 
 
 class AuditReport(Model):

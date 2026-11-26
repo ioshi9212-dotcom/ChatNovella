@@ -105,6 +105,8 @@ chatnovella/, chatnovella_lite/ и прежние плагины в GitHub ос�
 - POST /{sid}/characters — проверить временное предложение NPC (без записи).
   Передать proposal в prepare.new_characters; только проверенный commit
   регистрирует реально появившегося NPC, а rollback удаляет созданные файлы.
+  Если планируемая фраза изменилась, new_character_evidence передаёт
+  точную цитату из финальной сцены без дополнительного prepare.
 - POST /{sid}/prepare — reader_text, participants, kind=turn|audit|canon,
   необязательный постоянный request_id для игрового хода.
 - GET /{sid}/chunks/{packet_id}/{index} — получить часть и отметку чтения.

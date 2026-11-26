@@ -279,6 +279,17 @@ class TestSceneReview(unittest.TestCase):
             self.engine.commit(self.sid, self.npc_payload(p, full))
         self.assertEqual(self.game_files(), before)
 
+    def test_new_npc_final_quote_can_change_without_reprepare(self):
+        p = self.npc_packet(source="Маркус подошёл к окну.")
+        full = scene().replace("**Рината** — Привет.", "Маркус вошёл в комнату. **Рината** — Привет.")
+        self.assertTrue(self.review(p, full)["approved"])
+        data = self.npc_payload(p, full)
+        data["new_character_evidence"] = {"marcus": "Маркус вошёл в комнату."}
+        self.assertTrue(self.engine.commit(self.sid, data)["saved"])
+        card = self.game_files()["characters/marcus.md"].decode()
+        self.assertIn("Маркус вошёл в комнату.", card)
+        self.assertNotIn("Маркус подошёл к окну.", card)
+
     def test_new_npc_rollback_recovers_interrupted_deletion(self):
         p = self.npc_packet()
         full = scene().replace("**Рината** — Привет.", "Маркус вошёл в комнату. **Рината** — Привет.")
