@@ -156,7 +156,7 @@ class TestV2MCP(unittest.TestCase):
         init = self.rpc("initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
                                       "clientInfo": {"name": "V2 acceptance", "version": "1.0"}})
         self.assertEqual(init["serverInfo"]["name"], "ChatNovella V2")
-        self.assertIn("once", init["instructions"])
+        self.assertIn("rules_only=true", init["instructions"])
         tools = self.rpc("tools/list")["tools"]
         self.assertEqual({t["name"] for t in tools}, TOOLS)
         turn = next(t for t in tools if t["name"] == "save_v2_turn")["inputSchema"]
@@ -201,6 +201,8 @@ class TestV2MCP(unittest.TestCase):
         self.assertIn("missing_key_hook", files["hooks.md"])
 
     def test_instructions_hashes_and_author_skin_unchanged(self):
+        bootstrap = self.tool("load_v2_instructions", rules_only=True)
+        self.assertNotIn("skin_builder", bootstrap)
         instructions = self.tool("load_v2_instructions")
         for name in ("rules", "skin_builder"):
             self.assertEqual(instructions[name]["sha256"], digest(instructions[name]["content"]))
