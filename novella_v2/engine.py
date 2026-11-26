@@ -936,7 +936,8 @@ class Engine:
     def prepare(self, sid: str, reader_text: str = "",
                 participants: list[str] | None = None, kind: str = "turn",
                 request_id: str | None = None,
-                story_plan: dict | None = None) -> dict:
+                story_plan: dict | None = None,
+                new_characters: list[dict] | None = None) -> dict:
         need(kind in ("turn", "audit", "canon"), "CONTEXT_KIND", "Unsupported context kind")
         need(isinstance(reader_text, str), "INPUT_TEXT", "Reader input must be text")
         need(request_id is None or (isinstance(request_id, str) and
@@ -974,6 +975,15 @@ class Engine:
                 validate_state(state, cast, meta["turn"])
                 need(state["location"] != "НЕ ЗАДАНА", "OPENING_MISSING",
                      "Set opening scene before playing")
+            pending = meta.get("packet")
+            if (kind == "turn" and new_characters is None and pending
+                    and pending.get("version") == meta["version"]
+                    and pending.get("request_id") == request_id
+                    and pending.get("reader_text") == reader_text):
+                new_characters = list(pending.get("new_characters", {}).values())
+            proposals = self._character_proposals(new_characters, cast)
+            need(kind == "turn" or not proposals, "CHARACTER_PROPOSALS",
+                 "New NPC proposals belong only to game turns")
             given = participants or []
             need(isinstance(given, list) and all(isinstance(p, str) for p in given)
                  and len(given) == len(set(given)), "PARTICIPANTS",
@@ -986,8 +996,9 @@ class Engine:
                     relevant.update(row.get("participants", []))
                 if meta["audit_due"] == 60:
                     relevant = cast
-            need(relevant <= cast, "UNKNOWN_CHARACTER", "Character not registered in novel")
-            signature = self._source_signature(path, relevant, kind)
+            need(relevant <= cast | set(proposals), "UNKNOWN_CHARACTER", "Character not registered in novel or prepared as a proposal")
+            need(set(proposals) <= relevant, "CHARACTER_PROPOSALS", "New NPC proposals must be prepared participants")
+            signature = self._source_signature(path, relevant - set(proposals), kind)
             rules = self._read(self.instructions, "rules.md")
             skin = self._read(self.instructions, "skin_builder.md") if kind == "turn" else None
             rules_sha = digest(rules)
@@ -1007,6 +1018,7 @@ class Engine:
                 pending["participants"] == sorted(relevant) and
                 pending.get("request_id") == request_id and
                  pending.get("story_plan") == story_plan and
+                 pending.get("new_characters", {}) == proposals and
                  (kind != "turn" or pending.get("director_version") == meta["version"]) and
                  (kind != "audit" or "audit_story_ids" in pending) and
                 pending.get("source_signature") == signature and
@@ -1057,6 +1069,10 @@ class Engine:
                      "CANON_CHANGED", "Main questionnaire changed outside the engine")
             for name in sorted(relevant):
                 card_path = "characters/" + name + ".md"
+                if name in proposals:
+                    files[card_path] = CHARACTER_RULE + proposals[name]["established_text"]
+                    files["knowledge/" + name + ".md"] = "# Новые знания: " + name + "\n"
+                    continue
                 files[card_path] = self._read(path, card_path)
                 files["knowledge/" + name + ".md"] = self._read(path, "knowledge/" + name + ".md")
                 if name in meta.get("card_hashes", {}):
@@ -1101,6 +1117,7 @@ class Engine:
                        "audit_due": meta["audit_due"], "participants": sorted(relevant),
                        "instructions_mode": "rules_first_skin_last_per_turn",
                        "files": files,
+                       "new_character_proposals": list(proposals.values()),
                             "story_plan": story_plan,
                             "resolved_outcomes": story_hooks.outcome_index(hook_rows)
                                 if kind == "turn" else [],
@@ -1144,6 +1161,7 @@ class Engine:
                       "request_id": request_id, "source_signature": signature,
                       "director_version": meta["version"] if kind == "turn" else None,
                       "story_plan": story_plan, "audit_story_ids": audit_ids,
+                      "new_characters": proposals,
                       "instructions_mode": "rules_first_skin_last_per_turn",
                       "rules_sha256": rules_sha, "skin_sha256": skin_sha,
                       "skin_chunk_start": skin_chunk_start,
