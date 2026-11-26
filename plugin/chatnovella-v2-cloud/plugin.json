@@ -1,0 +1,23 @@
+{
+  "author": {
+    "name": "App developer"
+  },
+  "description": "Новеллы V2 на NovellaChat2: сессии NV2_, канон, память NPC, отношения и открытые арки.",
+  "name": "dev-6b050b144fe4819189e57c6db7c6da1e",
+  "version": "1.3.0",
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "capabilities": [],
+        "category": "Other",
+        "defaultPrompt": null,
+        "developerName": "App developer",
+        "displayName": "ChatNovella V2",
+        "longDescription": "Новеллы V2 на NovellaChat2: сессии NV2_, канон, память NPC, отношения и открытые арки.",
+        "shortDescription": "Новеллы V2 на NovellaChat2: сессии NV2_, канон, память NPC, отношения и открытые арки."
+      },
+      "apps": "./.app.json"
+    }
+  }
+}
