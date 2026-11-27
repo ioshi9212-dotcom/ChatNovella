@@ -1053,6 +1053,10 @@ class Engine:
             skin = self._read(self.instructions, "skin_builder.md") if kind == "turn" else None
             rules_sha = digest(rules)
             skin_sha = digest(skin) if skin is not None else None
+            reminder = (self._read(self.instructions, "author_reminder.md")
+                        if kind == "turn" and (self.instructions / "author_reminder.md").is_file()
+                        else None)
+            reminder_sha = digest(reminder) if reminder is not None else None
             pending = meta.get("packet")
             if kind == "turn":
                 if (story_plan is None and pending and pending.get("version") == meta["version"]
@@ -1075,6 +1079,7 @@ class Engine:
                  pending.get("instructions_mode") == "rules_first_skin_last_per_turn" and
                  pending.get("rules_sha256") == rules_sha and
                  pending.get("skin_sha256") == skin_sha and
+                 pending.get("author_reminder_sha256") == reminder_sha and
                  pending.get("scene_review_enabled") == self.scene_review_enabled and
                 pending.get("packet_stamp") == self._packet_stamp(path)):
                 return self._manifest(pending, meta["audit_due"], reused=True)
@@ -1183,6 +1188,9 @@ class Engine:
                                 "conditions_due_ids": plot_health["conditions_due"],
                                 "conditions_review_ids": plot_health["conditions_review"],
                                 "stale_hook_ids": plot_health["stale_hooks"]}}
+            if reminder is not None:
+                # A literary reminder, not a review gate; Skin Builder remains last.
+                context["author_reminder"] = reminder
             payload = json.dumps(context, ensure_ascii=False, separators=(",", ":"))
             skin_chunk_start = None
             if skin is not None:
@@ -1217,6 +1225,7 @@ class Engine:
                       "new_characters": proposals,
                       "instructions_mode": "rules_first_skin_last_per_turn",
                       "rules_sha256": rules_sha, "skin_sha256": skin_sha,
+                      "author_reminder_sha256": reminder_sha,
                       "skin_chunk_start": skin_chunk_start,
                       "scene_review_enabled": self.scene_review_enabled,
                       "hashes": [digest(c) for c in content_chunks], "received": [],
