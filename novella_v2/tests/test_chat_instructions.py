@@ -142,6 +142,28 @@ class TestChatInstructions(unittest.TestCase):
         self.assertTrue(parts[-1]["all_chunks_read"])
         self.assertEqual(digest("".join(p["content"] for p in parts)), packet["sha256"])
 
+    def test_author_reminder_is_loaded_before_skin_on_every_turn(self):
+        reminder = self.files / "author_reminder.md"
+        reminder.write_text("Читатель знает персонажей.", encoding="utf-8")
+        packet = self.packet()
+        context = self.read_packet(packet)
+        self.assertEqual(list(context)[-2:], ["author_reminder", "skin_builder"])
+        self.assertEqual(context["author_reminder"], reminder.read_text())
+        self.assertEqual(self.packet()["packet_id"], packet["packet_id"])
+
+        reminder.write_text("Даже повторённая ошибка не становится каноном.", encoding="utf-8")
+        fresh = self.packet()
+        self.assertNotEqual(fresh["packet_id"], packet["packet_id"])
+        self.assertEqual(self.read_packet(fresh)["author_reminder"], reminder.read_text())
+        self.assertTrue(self.save(fresh, 1, "Первая сцена.")["saved"])
+        next_packet = self.packet("chat-2")
+        self.assertEqual(self.read_packet(next_packet)["author_reminder"], reminder.read_text())
+
+    def test_author_reminder_is_not_loaded_for_canon(self):
+        (self.files / "author_reminder.md").write_text("Напоминание", encoding="utf-8")
+        context = self.read_packet(self.engine.prepare(self.sid, kind="canon"))
+        self.assertNotIn("author_reminder", context)
+
     def test_three_full_active_scenes_in_chronological_order_after_rollback(self):
         for number in range(1, 5):
             packet = self.packet(f"scene-{number}")
