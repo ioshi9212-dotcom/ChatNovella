@@ -142,22 +142,37 @@ class TestChatInstructions(unittest.TestCase):
         self.assertTrue(parts[-1]["all_chunks_read"])
         self.assertEqual(digest("".join(p["content"] for p in parts)), packet["sha256"])
 
-    def test_author_reminder_is_loaded_before_skin_on_every_turn(self):
+    def test_author_reminder_is_loaded_before_skin_every_third_turn(self):
         reminder = self.files / "author_reminder.md"
         reminder.write_text("Читатель знает персонажей.", encoding="utf-8")
-        packet = self.packet()
-        context = self.read_packet(packet)
-        self.assertEqual(list(context)[-2:], ["author_reminder", "skin_builder"])
-        self.assertEqual(context["author_reminder"], reminder.read_text())
-        self.assertEqual(self.packet()["packet_id"], packet["packet_id"])
+        for number in range(1, 7):
+            request_id = f"reminder-{number}"
+            packet = self.packet(request_id)
+            context = self.read_packet(packet)
+            self.assertEqual(list(context)[-1], "skin_builder")
+            if number % 3 == 0:
+                self.assertEqual(list(context)[-2:], ["author_reminder", "skin_builder"])
+                self.assertEqual(context["author_reminder"], reminder.read_text())
+                self.assertEqual(self.packet(request_id)["packet_id"], packet["packet_id"])
+                reminder.write_text(f"Новый сигнал {number}", encoding="utf-8")
+                fresh = self.packet(request_id)
+                self.assertNotEqual(fresh["packet_id"], packet["packet_id"])
+                self.assertEqual(self.read_packet(fresh)["author_reminder"], reminder.read_text())
+                packet = fresh
+            else:
+                self.assertNotIn("author_reminder", context)
+            self.assertTrue(self.save(packet, number, f"Сцена {number}.")["saved"])
 
-        reminder.write_text("Даже повторённая ошибка не становится каноном.", encoding="utf-8")
-        fresh = self.packet()
-        self.assertNotEqual(fresh["packet_id"], packet["packet_id"])
-        self.assertEqual(self.read_packet(fresh)["author_reminder"], reminder.read_text())
-        self.assertTrue(self.save(fresh, 1, "Первая сцена.")["saved"])
-        next_packet = self.packet("chat-2")
-        self.assertEqual(self.read_packet(next_packet)["author_reminder"], reminder.read_text())
+    def test_author_reminder_cadence_survives_rollback(self):
+        (self.files / "author_reminder.md").write_text("Напоминание", encoding="utf-8")
+        for number in range(1, 4):
+            packet = self.packet(f"scene-{number}")
+            self.read_packet(packet)
+            self.save(packet, number, f"Сцена {number}.")
+        self.engine.rollback(self.sid, self.engine.status(self.sid)["version"],
+                             "scene-3", "Отмена третьей сцены")
+        context = self.read_packet(self.packet("replacement-3"))
+        self.assertEqual(list(context)[-2:], ["author_reminder", "skin_builder"])
 
     def test_author_reminder_is_not_loaded_for_canon(self):
         (self.files / "author_reminder.md").write_text("Напоминание", encoding="utf-8")
