@@ -1054,7 +1054,8 @@ class Engine:
             rules_sha = digest(rules)
             skin_sha = digest(skin) if skin is not None else None
             reminder = (self._read(self.instructions, "author_reminder.md")
-                        if kind == "turn" and (self.instructions / "author_reminder.md").is_file()
+                        if kind == "turn" and (meta["turn"] + 1) % 3 == 0
+                        and (self.instructions / "author_reminder.md").is_file()
                         else None)
             reminder_sha = digest(reminder) if reminder is not None else None
             pending = meta.get("packet")
