@@ -161,6 +161,36 @@ class TestV2MCP(unittest.TestCase):
                                     "status": "active", "note": "Обнаружен тайник ключа",
                                     "source": "Ключ спрятан в красной книге"}]}
 
+    def test_two_role_mcp_roundtrip(self):
+        from novella_v2.tests.test_scene_context import compilation
+        self.engine.scene_context_enabled = True
+        sid = self.start()
+        request = "mcp-turn-1"
+        reader = "Шепчу Адриану, где спрятан ключ."
+        brief = self.tool("get_v2_director_brief", session_id=sid)
+        raw = self.tool("prepare_v2_context", session_id=sid, reader_text=reader,
+                        participants=[], kind="turn", request_id=request)
+        self.assertEqual(raw["phase"], "collector")
+        self.assertIn("characters/silas.md", self.read(sid, raw))
+        denied = self.rpc("tools/call", {"name": "save_v2_turn", "arguments": {
+            "session_id": sid, "turn": self.body(raw)}})
+        self.assertTrue(denied["isError"])
+        self.assertIn("SCENE_CONTEXT_REQUIRED", denied["content"][0]["text"])
+        director = self.tool("submit_v2_scene_context", session_id=sid,
+                             expected_version=raw["version"], packet_id=raw["packet_id"],
+                             request_id=request, chunk_hashes=raw["chunk_hashes"],
+                             scene_context=compilation("adrian", "silas"),
+                             participants=["adrian", "silas"], story_plan=fixture_plan(brief))
+        self.assertEqual(director["phase"], "director")
+        pieces = [self.tool("read_v2_chunk", session_id=sid, packet_id=director["packet_id"],
+                            index=i)["content"] for i in director["unread_chunk_indices"]]
+        packet = json.loads("".join(pieces))
+        self.assertEqual(packet["reader_text"], reader)
+        self.assertEqual(list(packet)[-1], "skin_builder")
+        saved = self.tool("save_v2_turn", session_id=sid, turn=self.body(director))
+        self.assertTrue(saved["saved"])
+        self.assertEqual(saved["turn"], 1)
+
     def test_public_transport_and_all_typed_tools(self):
         message = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
         public = self.client.post("/mcp", json=message, headers=self.headers)
