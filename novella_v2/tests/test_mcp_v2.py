@@ -179,7 +179,10 @@ class TestV2MCP(unittest.TestCase):
         director = self.tool("submit_v2_scene_context", session_id=sid,
                              expected_version=raw["version"], packet_id=raw["packet_id"],
                              request_id=request, chunk_hashes=raw["chunk_hashes"],
-                             scene_context=compilation("adrian", "silas"),
+                             scene_context=compilation("adrian", "silas", quotes={
+                                 "pov": "POV: тестовая героиня.",
+                                 "adrian": "Адриан: тестовый библиотекарь.",
+                                 "silas": "Сайлас: отсутствует и не слышит разговор."}),
                              participants=["adrian", "silas"], story_plan=fixture_plan(brief))
         self.assertEqual(director["phase"], "director")
         pieces = [self.tool("read_v2_chunk", session_id=sid, packet_id=director["packet_id"],
