@@ -1382,7 +1382,7 @@ class Engine:
                          quote in author, "SCENE_CONTEXT_EVIDENCE",
                          f"{name}: Цитата must be an exact fragment of the author card")
 
-    def _check_context_sources(self, path: Path, packet: dict) -> None:
+    def _check_context_sources(self, path: Path, packet: dict) -> tuple[str, str | None]:
         need(packet.get("packet_stamp") == self._packet_stamp(path),
              "PACKET_CHANGED", "Prepared context bytes changed")
         need(packet.get("source_signature") ==
@@ -1392,16 +1392,18 @@ class Engine:
              "RULES_VERSION_CHANGED", "Rules changed; prepare fresh context")
         need(digest(self._read(self.instructions, "scene_builder.md")) == packet.get("scene_builder_sha256"),
              "SCENE_BUILDER_VERSION_CHANGED", "Scene Builder changed; prepare fresh context")
-        need(digest(self._read(self.instructions, "skin_builder.md")) == packet.get("skin_sha256"),
+        skin = self._read(self.instructions, "skin_builder.md")
+        need(digest(skin) == packet.get("skin_sha256"),
              "SKIN_VERSION_CHANGED", "Skin Builder changed; prepare fresh context")
         need(packet.get("scene_review_enabled") == self.scene_review_enabled,
              "REVIEW_MODE_CHANGED", "Prepare fresh context for the current review mode")
         reminder_path = self.instructions / "author_reminder.md"
+        turn = json.loads(self._read(path, "state.md"))["turn"] + 1
         reminder = (reminder_path.read_bytes().decode("utf-8")
-                    if packet.get("author_reminder_sha256") is not None and reminder_path.is_file()
-                    else None)
+                    if turn % 3 == 0 and reminder_path.is_file() else None)
         need((digest(reminder) if reminder is not None else None) == packet.get("author_reminder_sha256"),
              "RULES_VERSION_CHANGED", "Author reminder changed; prepare fresh context")
+        return skin, reminder
 
     def _director_gate(self, path: Path, packet: dict) -> None:
         need((packet.get("instructions_mode") == CONTEXT_MODE) == self.scene_context_enabled,
@@ -1434,7 +1436,11 @@ class Engine:
             need(isinstance(participants, list) and all(isinstance(x, str) for x in participants)
                  and len(participants) == len(set(participants)), "PARTICIPANTS",
                  "Select unique English NPC IDs")
-            need(isinstance(scene_context, str), "SCENE_CONTEXT_SIZE", "Scene context must be text")
+            need(isinstance(scene_context, str) and 0 < len(scene_context) <= CHUNK_SIZE
+                 and bool(scene_context.strip()), "SCENE_CONTEXT_SIZE",
+                 "Scene context must contain 1–36000 Unicode characters")
+            need(new_characters is None or isinstance(new_characters, list),
+                 "CHARACTER_PROPOSALS", "New character proposals must be a list")
             submission_sha = digest(dump({"context": scene_context, "participants": sorted(participants),
                                          "plan": story_plan, "new_characters": new_characters}))
             if p.get("phase") == "director" and p.get("collector_id") == packet_id:
@@ -1445,12 +1451,19 @@ class Engine:
                 return self._manifest(p, meta["audit_due"], reused=True)
             p = self._receipt(meta, packet_id, chunk_hashes, "turn")
             need(p.get("phase") == "collector", "SCENE_CONTEXT_PHASE", "Expected collector packet")
-            self._check_context_sources(path, p)
+            skin, reminder = self._check_context_sources(path, p)
             cast = self._cast(path)
-            # Existing tentative proposals plus new candidates found in the collection.
-            combined = list(p.get("new_characters", {}).values()) + (new_characters or [])
-            proposals = self._character_proposals(combined, cast)
             selected = set(participants)
+            # The initial proposal is an option, not an obligation to introduce an NPC.
+            # A matching proposal may be repeated; conflicting definitions are rejected.
+            initial = p.get("new_characters", {})
+            added = self._character_proposals(new_characters, cast)
+            need(all(name not in initial or initial[name] == row for name, row in added.items()),
+                 "CHARACTER_PROPOSALS", "Conflicting definitions for a tentative NPC")
+            need(set(added) <= selected, "CHARACTER_PROPOSALS",
+                 "Every submitted proposal must have a selected dossier")
+            proposals = self._character_proposals(
+                [row for name, row in {**initial, **added}.items() if name in selected], cast)
             state = json.loads(self._read(path, "state.md"))
             need(set(state["present"]) | set(state["remote"]) <= selected, "SCENE_CONTEXT_ACTORS",
                  "Include the currently present/remote NPCs in the available cast")
@@ -1459,21 +1472,33 @@ class Engine:
             self._check_scene_context(path, scene_context, selected, proposals)
             plan = story_hooks.validate_plan(story_plan, set(meta.get("director_valid_ids", [])),
                                              set(meta.get("director_priority_ids", [])))
-            skin = self._read(self.instructions, "skin_builder.md")
-            reminder = (self._read(self.instructions, "author_reminder.md")
-                        if p.get("author_reminder_sha256") is not None else None)
-            need((digest(reminder) if reminder is not None else None) == p.get("author_reminder_sha256"),
-                 "RULES_VERSION_CHANGED", "Author reminder changed; prepare fresh context")
+            # Keep exact small mechanical baselines, not a second raw world packet.
+            # This prevents a compressed dossier from rounding metrics or losing objects.
+            rel = validate_relations(json.loads(self._read(path, "relationships.md")), cast)
+            people = selected | {"pov"}
+            continuity = {"state": state, "relationships": {
+                "rules": rel["rules"],
+                "npc_to_pov": {name: row for name, row in rel["npc_to_pov"].items()
+                               if name in selected},
+                "familiarity": {name: {target: value for target, value in row.items()
+                                       if target in people}
+                                for name, row in rel["familiarity"].items() if name in people},
+                "npc_to_npc": {name: {target: value for target, value in row.items()
+                                      if target in selected}
+                               for name, row in rel["npc_to_npc"].items() if name in selected}}}
             context_sha = digest(scene_context)
             context = {"phase": "director", "instruction": (
                 "Collection is complete. You are now the director/writer. Use the returned "
                 "scene_context as the working material and the full Skin Builder for prose. "
-                "Facts and constraints are binding; opportunities are not predestined events. "
-                "Do not repeat collection or expose this file. Save only actual events and participants."),
+                "Established source facts and constraints are binding; interpretations and opportunities "
+                "are not predestined events. Real reactions may change intentions. The exact continuity "
+                "baseline is technical data, not additional character knowledge. Do not repeat collection "
+                "or expose this file. Save only actual events and participants."),
                 "reader_text": p["reader_text"], "turn": meta["turn"] + 1,
                 "participants": sorted(selected), "scene_context": {
                     "content": scene_context, "chars": len(scene_context), "sha256": context_sha},
-                "story_plan": plan, "new_character_proposals": list(proposals.values())}
+                "continuity": continuity, "story_plan": plan,
+                "new_character_proposals": list(proposals.values())}
             if reminder is not None:
                 context["author_reminder"] = reminder
             prefix = json.dumps(context, ensure_ascii=False, separators=(",", ":"))[:-1]
