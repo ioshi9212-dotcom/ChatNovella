@@ -15,13 +15,25 @@ def state(turn):
             "remote": {}, "objects": ["зеркало"], "unfinished": []}
 
 
-def compilation(*ids):
+def compilation(*ids, quotes=None):
+    quotes = quotes or {"adrian": "Адриан ревнив и вспыльчив.",
+                        "silas": "Сайлас видит отражения."}
+    def dossier(name):
+        return (f"### {name}\n"
+                f"Канон: ФАКТ: сведения о {name}.\n"
+                f"Цитата: {quotes.get(name, 'нет отдельной карточки' if name == 'pov' else 'предложение')}\n"
+                "Внешность: подробности не заданы.\n"
+                "Знания: только доступные лично.\n"
+                "Отношения: не установлены.\n"
+                "Состояние: находится в комнате или кандидат.\n"
+                "Мотивы: ИНТЕРПРЕТАЦИЯ: текущая цель.\n"
+                "Поведение: ВОЗМОЖНОСТЬ: ответ на приветствие.\n"
+                "Границы: не передавать чужие знания.\n")
     return ("## Текущий момент\nВвод: Привет.\n"
             "## Предыстория\nПервый разговор.\n"
             "## Пространство\nКомната, зеркало.\n"
-            "## Персонажи\n### pov\nФАКТ: задано приветствие.\n" +
-            "".join(f"### {name}\nФАКТ: карточка {name}. ИНТЕРПРЕТАЦИЯ: текущая цель.\n"
-                    for name in ids) +
+            "## Персонажи\n" + dossier("pov") +
+            "".join(dossier(name) for name in ids) +
             "## Мир и сюжет\nОткрытые процессы учитываются.\n"
             "## Возможности режиссёра\nКандидат не означает появление.\n"
             "## Ограничения\nНе передавать чужие знания.\n")
@@ -137,6 +149,11 @@ class TestSceneContext(unittest.TestCase):
         self.assert_code("SCENE_CONTEXT_ACTORS", self.submit, raw, compilation("silas"), ["silas"])
         self.assert_code("UNKNOWN_CHARACTER", self.submit, raw, compilation("adrian", "unknown"),
                          ["adrian", "unknown"])
+        self.assert_code("SCENE_CONTEXT_DOSSIER", self.submit, raw,
+                         compilation("adrian", "silas").replace("Мотивы:", "Пропуск:", 1))
+        self.assert_code("SCENE_CONTEXT_EVIDENCE", self.submit, raw,
+                         compilation("adrian", "silas").replace("Адриан ревнив и вспыльчив.",
+                                                               "Адриан всегда спокоен.", 1))
         valid = compilation("adrian", "silas")
         limit = valid + "🌟" * (CHUNK_SIZE - len(valid))
         self.assert_code("SCENE_CONTEXT_SIZE", self.submit, raw, limit + "🌟")
