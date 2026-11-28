@@ -1341,13 +1341,20 @@ class Engine:
         sections = ["Текущий момент", "Предыстория", "Пространство", "Персонажи",
                     "Мир и сюжет", "Возможности режиссёра", "Ограничения"]
         headings = list(re.finditer(r"^## (.+?)\s*$", text, flags=re.M))
-        need([m.group(1).strip() for m in headings] == sections,
-             "SCENE_CONTEXT_SECTIONS", "Use every required scene_builder heading in order")
+        found = [m.group(1).strip() for m in headings]
+        # The original Scene Builder presented volume guidance as an eighth
+        # level-two heading. Accept that exact trailing heading for clients
+        # following the old instructions; it is not required scene material.
+        legacy_volume = found == sections + ["Приоритет объёма"]
+        need(found == sections or legacy_volume, "SCENE_CONTEXT_SECTIONS",
+             "Expected headings in order: " + " | ".join(sections) +
+             "; received: " + " | ".join(title[:120] for title in found[:20]))
         bodies = {}
-        for i, heading in enumerate(headings):
+        for i, heading in enumerate(headings[:len(sections)]):
             end = headings[i + 1].start() if i + 1 < len(headings) else len(text)
             body = text[heading.end():end].strip()
-            need(bool(body), "SCENE_CONTEXT_SECTIONS", "Each scene context section must contain material")
+            need(bool(body), "SCENE_CONTEXT_SECTIONS",
+                 "Required scene context section is empty: " + sections[i])
             bodies[sections[i]] = body
         actors = list(re.finditer(r"^### ([a-z][a-z0-9_]{1,49})\s*$",
                                   bodies["Персонажи"], flags=re.M))
