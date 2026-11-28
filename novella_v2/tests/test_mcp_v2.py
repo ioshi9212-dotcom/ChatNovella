@@ -21,7 +21,7 @@ TOOLS = {
     "get_v2_status", "approve_v2_canon", "set_v2_opening", "add_v2_character",
     "get_v2_director_brief", "backfill_v2_hooks",
     "get_v2_review_manifest",
-    "prepare_v2_context", "read_v2_chunk", "review_v2_scene",
+    "prepare_v2_context", "read_v2_chunk", "submit_v2_scene_context", "review_v2_scene",
     "save_v2_turn", "finish_v2_audit",
     "search_v2_history", "rollback_v2_turn",
 }
