@@ -123,7 +123,7 @@ def build_mcp(engine: Callable[[], Engine]) -> FastMCP:
         session_id: SessionId, expected_version: Version,
         name: str, display: str, established_text: str,
     ) -> dict[str, Any]:
-        """Validate a temporary NPC proposal only. Pass returned proposal in prepare_v2_context.new_characters; final successful scene save creates permanent files."""
+        """Validate a temporary NPC proposal only. Pass returned proposal in submit_v2_scene_context.new_characters (or prepare_v2_context.new_characters in legacy mode); final successful scene save creates permanent files."""
         return await call("add_character", session_id, expected_version, name, display, established_text)
 
     @server.tool(annotations=repeat)
