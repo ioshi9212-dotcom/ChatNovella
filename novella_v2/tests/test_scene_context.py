@@ -57,7 +57,10 @@ class TestSceneContext(unittest.TestCase):
             {"anchor": "Мир.", "target": "novel"},
             {"anchor": "Адриан", "target": "adrian"},
             {"anchor": "Сайлас", "target": "silas"}],
-            {"adrian": "Адриан", "silas": "Сайлас"})
+            {"adrian": "Адриан", "silas": "Сайлас"}, relationships={
+                "familiarity": {"adrian": {"pov": "acquainted"}, "silas": {"pov": "acquainted"}},
+                "npc_to_pov": {"adrian": {"ревность": 87}, "silas": {"интерес": 24}},
+                "npc_to_npc": {}})
         self.sid = created["session_id"]
         self.folder = root / "sessions" / self.sid
         self.engine.approve(self.sid, created["version"], created["canon_hash"], "Подтверждаю")
@@ -126,6 +129,8 @@ class TestSceneContext(unittest.TestCase):
         self.assertEqual(writing["reader_text"], "Привет")
         self.assertEqual(list(writing)[-1], "skin_builder")
         self.assertNotIn("files", writing)
+        self.assertEqual(writing["continuity"]["state"], state(0))
+        self.assertEqual(writing["continuity"]["relationships"]["npc_to_pov"]["adrian"], {"ревность": 87})
         self.assertEqual(writing["skin_builder"]["content"], "Художественный текст 🌟")
         self.assertEqual((self.folder / "system/scene_context.md").read_bytes().decode("utf-8"),
                          compilation("adrian", "silas"))
@@ -204,6 +209,53 @@ class TestSceneContext(unittest.TestCase):
         self.read(legacy)
         self.engine.scene_context_enabled = True
         self.assert_code("CONTEXT_MODE_CHANGED", self.engine.commit, self.sid, self.turn(legacy))
+
+    def test_exact_continuity_does_not_include_unselected_relationships(self):
+        raw = self.raw()
+        self.read(raw)
+        director = self.submit(raw, ids=["adrian"])
+        writing = self.read(director)
+        self.assertEqual(writing["continuity"]["state"], state(0))
+        self.assertEqual(writing["continuity"]["relationships"]["npc_to_pov"],
+                         {"adrian": {"ревность": 87}})
+        self.assertNotIn("silas", writing["continuity"]["relationships"]["familiarity"])
+
+    def test_initial_proposal_can_be_dropped_or_repeated_without_duplicate(self):
+        proposal = {"name": "marcus", "display": "Маркус",
+                    "established_text": "Маркус остановился у дверей."}
+        self.engine.director_brief(self.sid)
+        raw = self.engine.prepare(self.sid, "Привет", ["marcus"],
+                                  request_id="test-1", new_characters=[proposal])
+        self.read(raw)
+        director = self.submit(raw, ids=["adrian"])
+        self.assertEqual(self.read(director)["new_character_proposals"], [])
+        # New uncommitted request supersedes the scratch packet, not game history.
+        raw2 = self.engine.prepare(self.sid, "Привет", ["marcus"],
+                                   request_id="test-2", new_characters=[proposal])
+        self.read(raw2)
+        director2 = self.submit(raw2, ids=["adrian", "marcus"], proposals=[proposal])
+        self.assertEqual(self.read(director2)["new_character_proposals"], [proposal])
+        self.assertFalse((self.folder / "characters/marcus.md").exists())
+
+    def test_author_reminder_appearing_mid_turn_invalidates_both_phases(self):
+        for n in (1, 2):
+            raw = self.raw(f"turn-{n}")
+            self.read(raw)
+            director = self.submit(raw, ids=["adrian"])
+            self.read(director)
+            self.engine.commit(self.sid, self.turn(director, n))
+        raw = self.raw("turn-3")
+        self.read(raw)
+        reminder = self.instructions / "author_reminder.md"
+        reminder.write_text("Новый сигнал", encoding="utf-8")
+        self.assert_code("RULES_VERSION_CHANGED", self.submit, raw)
+        fresh = self.raw("turn-3")
+        self.read(fresh)
+        director = self.submit(fresh, ids=["adrian"])
+        self.assertEqual(self.read(director)["author_reminder"], "Новый сигнал")
+        reminder.unlink()
+        self.assert_code("RULES_VERSION_CHANGED", self.engine.commit, self.sid,
+                         self.turn(director, 3))
 
     def test_changed_submission_cannot_reuse_receipt(self):
         raw = self.raw()
