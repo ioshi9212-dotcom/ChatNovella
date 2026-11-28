@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any, Callable, Literal
+from typing import Annotated, Any, Callable, Literal
+
+from pydantic import Field
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
@@ -121,7 +123,7 @@ def build_mcp(engine: Callable[[], Engine]) -> FastMCP:
         session_id: SessionId, expected_version: Version,
         name: str, display: str, established_text: str,
     ) -> dict[str, Any]:
-        """Validate a temporary NPC proposal only. Pass returned proposal in prepare_v2_context.new_characters; final successful scene save creates permanent files."""
+        """Validate a temporary NPC proposal only. Pass returned proposal in submit_v2_scene_context.new_characters (or prepare_v2_context.new_characters in legacy mode); final successful scene save creates permanent files."""
         return await call("add_character", session_id, expected_version, name, display, established_text)
 
     @server.tool(annotations=repeat)
@@ -158,21 +160,41 @@ def build_mcp(engine: Callable[[], Engine]) -> FastMCP:
         story_plan: StoryPlan | None = None,
         new_characters: list[NewCharacterProposal] | None = None,
     ) -> dict[str, Any]:
-        """Use director first, then provide a short story_plan for plot-bearing turns.
-        focus_ids are known arc:/hook:/window: IDs; direction, world, deferred explain
-        the choice; priority maps exact plan_priority_ids to decisions. No quotas.
-        Keep request_id and plan on retries. New NPCs use new_characters (name, display,
-        established_text: planned exact scene excerpt). These are temporary until
-        successful commit. If the excerpt changes, save_v2_turn.new_character_evidence
-        can provide the final quote. No proposals or plan for canon/audit."""
+        """Call director brief first. With scene_context_enabled=true, use participants=[]
+        and defer story_plan and new_characters until collection is complete. Read all
+        collector chunks, then submit_v2_scene_context; no prose yet. On retries keep
+        exact request_id/input. A reused director packet already contains the completed
+        collection: read only its remaining chunks. Legacy mode keeps its original plan
+        and participant selection. No proposals or plan for canon/audit."""
         return await call("prepare", session_id, reader_text, participants, kind, request_id,
                           story_plan.model_dump() if story_plan is not None else None,
                           [row.model_dump() for row in new_characters] if new_characters is not None else None)
 
     @server.tool(annotations=repeat)
     async def read_v2_chunk(session_id: SessionId, packet_id: str, index: int) -> dict[str, Any]:
-        """Read next unread chunk in ascending order. Rules first, recent scenes, world facts, then the final Skin Builder block. Verify hashes; write only after all_chunks_read."""
+        """Read next unread chunk in order; verify hashes. Collector phase contains raw
+        facts and scene_builder only: after all_chunks_read submit the compiled context.
+        Director phase returns the compilation and full Skin Builder; write only after
+        all director chunks have been read. Audit/canon are unchanged."""
         return await call("read_chunk", session_id, packet_id, index)
+
+    @server.tool(annotations=repeat)
+    async def submit_v2_scene_context(
+        session_id: SessionId, expected_version: Version, packet_id: str,
+        request_id: RequestId, chunk_hashes: list[Checksum],
+        scene_context: Annotated[str, Field(min_length=1, max_length=36000)],
+        participants: list[str], story_plan: StoryPlan | None = None,
+        new_characters: list[NewCharacterProposal] | None = None,
+    ) -> dict[str, Any]:
+        """MANDATORY in collector mode after all raw chunks. Send the actual compiled
+        scene_context.md (not narration), dossiers for POV and every selected NPC,
+        plot plan and tentative new characters. Selected NPCs are possible participants,
+        not proof of appearance. Returns NEW director packet ID and hashes. Read all
+        new chunks; only then write prose. Exact retries reuse the director packet."""
+        return await call("submit_scene_context", session_id, expected_version,
+                          packet_id, request_id, chunk_hashes, scene_context, participants,
+                          story_plan.model_dump() if story_plan is not None else None,
+                          [row.model_dump() for row in new_characters] if new_characters is not None else None)
 
     @server.tool(annotations=read)
     async def get_v2_review_manifest() -> dict[str, Any]:
@@ -200,7 +222,8 @@ def build_mcp(engine: Callable[[], Engine]) -> FastMCP:
 
     @server.tool(annotations=repeat)
     async def save_v2_turn(session_id: SessionId, turn: Turn) -> dict[str, Any]:
-        """When scene_review_enabled=false, save final narration directly without review.
+        """In collector mode require the final director packet ID and hashes, not the raw collector packet.
+        When scene_review_enabled=false, save final narration directly without review.
         Atomically save scene plus independent evidence-backed hook_updates. Never
         erase old unresolved hooks when advancing another one. Publish only after saved=true."""
         return await call("commit", session_id, turn.model_dump(exclude_unset=True))

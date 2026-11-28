@@ -84,7 +84,7 @@ class TestChatInstructions(unittest.TestCase):
     def test_versions_returns_only_hashes_never_full_instructions(self):
         meta = self.engine.instruction_versions()
         self.assertEqual(set(meta),
-                         {"rules_sha256", "skin_builder_sha256", "skin_builder_empty", "scene_review_enabled"})
+                         {"rules_sha256", "skin_builder_sha256", "skin_builder_empty", "scene_review_enabled", "scene_context_enabled"})
         self.assertFalse(meta["scene_review_enabled"])
         self.assertTrue(meta["skin_builder_empty"])
         self.assertEqual(meta["rules_sha256"],

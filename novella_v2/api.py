@@ -10,7 +10,13 @@ from fastapi.responses import JSONResponse
 from .engine import Engine, EngineError
 from .mcp_adapter import build_mcp
 
-store = Engine(os.getenv("CHATNOVELLA_V2_DATA_DIR", "./.novella_v2_data"))
+# Experimental branch: two stages by default for the running API.
+# Direct Engine fixtures and explicit legacy deployments retain their old mode.
+context_mode = os.getenv("CHATNOVELLA_V2_SCENE_CONTEXT", "1").strip().lower()
+if context_mode not in {"0", "1", "false", "true", "off", "on"}:
+    raise ValueError("CHATNOVELLA_V2_SCENE_CONTEXT must be 0 or 1")
+store = Engine(os.getenv("CHATNOVELLA_V2_DATA_DIR", "./.novella_v2_data"),
+               scene_context_enabled=context_mode in {"1", "true", "on"})
 mcp = build_mcp(lambda: store)
 mcp_app = mcp.streamable_http_app()
 
@@ -118,6 +124,14 @@ def prepare(sid: str, body: dict):
 @app.get("/v2/novels/{sid}/chunks/{packet_id}/{index}")
 def read_chunk(sid: str, packet_id: str, index: int):
     return store.read_chunk(sid, packet_id, index)
+
+
+@app.post("/v2/novels/{sid}/scene-context")
+def submit_scene_context(sid: str, body: dict):
+    return store.submit_scene_context(
+        sid, body["expected_version"], body["packet_id"], body["request_id"],
+        body["chunk_hashes"], body["scene_context"], body["participants"],
+        body.get("story_plan"), body.get("new_characters"))
 
 
 @app.get("/v2/scene-review-manifest")

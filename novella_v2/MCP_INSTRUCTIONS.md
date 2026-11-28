@@ -1,5 +1,49 @@
 # ChatNovella V2
 
+## Experimental two-role protocol (server scene_context_enabled=true)
+
+This protocol overrides the legacy single-packet turn instructions below.
+At bootstrap read Rules. For each new turn:
+1. Call get_v2_director_brief. Call prepare_v2_context with stable request_id,
+   exact reader_text, kind=turn, participants=[]; defer story_plan and new
+   NPC proposals. Read the manifest phase. A committed duplicate returns
+   saved narration; never generate again.
+2. phase=collector: read every raw chunk in order and verify hashes. This
+   packet includes ALL existing cast cards and personal knowledge, recent
+   scenes, state, relationships, history milestones, hooks and scene_builder.
+   You are the collector, NOT the writer. Search earlier history if required.
+   Compile actual scene_context Markdown using all required headings and
+   POV + selected NPC dossiers, at most 36000 Unicode characters. Distinguish
+   facts, interpretations and optional opportunities. Select plausible
+   participants (include all current present/remote NPCs; candidate does NOT
+   mean actual witness). Propose new NPCs only if justified. Derive the final
+   story_plan, addressing every plan_priority_ids item.
+3. Call submit_v2_scene_context(session_id, expected_version, packet_id,
+   request_id, chunk_hashes, scene_context, participants, story_plan,
+   new_characters). No narration, no game mutations. Server stores temporary
+   system/scene_context.md and returns a NEW director packet. Exact retries
+   return the same director packet. The raw packet cannot be used for commit.
+4. phase=director: read every remaining chunk, including the last full
+   Skin Builder block. Now switch role to director/writer. Use the returned
+   compilation, exact reader input, continuity (exact state and selected relationships), and full Skin Builder. Established source facts and constraints bind the scene; interpretations and optional opportunities are not foregone events. Source facts override a mistaken compilation. Continuity is not personal knowledge.
+   If a necessary participant is outside selected cast, reprepare with the same
+   request_id/input and changed initial participants/proposals, then collect
+   again. Do not call prepare just to check readiness.
+5. Only after all_chunks_read=true in director phase, write narration, derive
+   actual changes and save_v2_turn using the NEW packet ID and hashes. Only
+   actual participants and witnessed events are committed. Review setting
+   retains its old semantics (disabled by default). Keep service material
+   private; never expose it as narration.
+6. If prepare returns reused_pending_packet=true, follow its current phase
+   and unread_chunk_indices. If already director, do not repeat collection.
+   If instruction versions/sources/mode change, prepare again with the same
+   request_id/input. Never reuse a previous turn's context or assumptions.
+
+Use the legacy single-packet preparation paragraphs below ONLY when scene_context_enabled=false. Common canon, memory, commit and review requirements apply in both modes.
+Audit, canon, rollback, technical evidence and transaction guarantees do not
+change. A role change in the same conversation does not clear the LLM context.
+
+
 This server handles only new NV2_ sessions. Use the existing Lite plugin for
 LITE_ sessions. Never migrate or rewrite Lite/CN_ games through this server.
 
@@ -46,9 +90,9 @@ generic no-NPC-schedule guidance. If an authored deadline is already missed,
 report it; NEVER retroactively invent or rewrite scenes to pretend compliance.
 
 Use the brief + reader's input + current scene to decide participants; load
-FULL character cards for every genuinely participating NPC with prepare.
+FULL character cards for every genuinely participating NPC with prepare (collector mode already loads every existing card as a candidate).
 For existing entering characters not already prepared, reprepare once and read
-the new packet. For genuinely new NPCs, pass new_characters to prepare:
+the new packet. For genuinely new NPCs, pass new_characters to submit_v2_scene_context in collector mode, or to prepare in legacy mode:
 {name, display, established_text} (stable English ID, name, planned literal
 scene excerpt). add_v2_character is validation only; it returns a proposal,
 not a registered character. Proposals live in the current packet only,
@@ -101,8 +145,7 @@ and a rotating sample of old closures at 60. Server checks all ledger
 records and archive evidence at every audit. Do not claim semantic proof
 from a literal quote alone. Preserve user choices and storyline pace.
 
-For each new turn choose one stable request_id. After the director brief,
-provide story_plan to prepare_v2_context: focus_ids (known arc:/hook:/window:
+For each new turn choose one stable request_id. The plan fields below apply to both modes. In legacy mode after the director brief, provide story_plan to prepare_v2_context; in collector mode provide it at submit_v2_scene_context after collection: focus_ids (known arc:/hook:/window:
 IDs, may be empty), direction, world, deferred (short concrete reasoning),
 priority (map every plan_priority_ids ID to an actual decision or grounded
 reason to defer). Required when plot records/windows exist; recommended even
@@ -112,7 +155,7 @@ otherwise text. Due does not mean forced. Closed results remain in
 resolved_hooks of the director brief and resolved_outcomes of the turn packet. Record actual consequences as separate hooks. Every open
 hook needs an existing open arc; repair missing arcs with explicit historical
 arc_repairs (id,title,status,note,source,origin_turn) in backfill_v2_hooks.
-Call prepare_v2_context with that ID, exact reader_text and real participants. If already_committed_duplicate
+Legacy single-packet turn only: call prepare_v2_context with that ID, exact reader_text and real participants. If already_committed_duplicate
 is true, return its saved narration without generating or saving another turn.
 If reused_pending_packet is true, continue that packet and read ONLY its
 unread_chunk_indices. Retain session_id, request_id, packet_id and read progress.
@@ -124,9 +167,7 @@ Skin Builder block starts at skin_chunk_start and is always last. Read the
 complete final block, including all its chunks, before writing. Require
 all_chunks_read=true. Do not call prepare merely to check readiness.
 
-relationships.md and open_threads.md must be read in EVERY turn/audit/canon
-packet, including empty files. Rules starts every packet. Skin Builder is
-last in turn packets only; audit and canon do not contain it.
+relationships.md and open_threads.md must be read in the initial turn/audit/canon packet, including empty files. In collector mode do not load them again after the director packet. Rules starts raw packets. Skin Builder is last in director/legacy turn packets; collector, audit and canon do not contain it.
 Load complete cards and personal knowledge for actual scene participants.
 Director context, hidden lore, relations, arcs, timeline and other characters'
 memories do not automatically become an NPC's knowledge. Before committing,
@@ -214,9 +255,9 @@ Publish narration ONLY after saved=true; return the confirmed saved narration.
 Identical retries must preserve the entire payload and must not create a turn.
 On timeout/5xx retry that exact operation at most twice. If save status is
 unknown, prepare with the SAME request_id to recover a committed result.
-If RULES_VERSION_CHANGED, SKIN_VERSION_CHANGED or REVIEW_MODE_CHANGED, reprepare with the same
+If RULES_VERSION_CHANGED, SCENE_BUILDER_VERSION_CHANGED, SKIN_VERSION_CHANGED, SOURCE_CHANGED, SCENE_CONTEXT_CHANGED, CONTEXT_MODE_CHANGED or REVIEW_MODE_CHANGED, reprepare with the same
 request_id, reader_text and plan, then read the new ordered packet and use
-its fresh final Skin Builder. For other 4xx/validation errors read the exact code and correct the cause once; if it
+its fresh final Skin Builder (in collector mode repeat both phases). For other 4xx/validation errors read the exact code and correct the cause once; if it
 recurs, stop and explain it. Never loop prepare/read/rewrite. A near-duplicate
 warning is informational and does not require an artificial plot change.
 
