@@ -1,5 +1,50 @@
 # ChatNovella V2
 
+## Experimental two-role protocol (server scene_context_enabled=true)
+
+This protocol overrides the legacy single-packet turn instructions below.
+At bootstrap read Rules. For each new turn:
+1. Call get_v2_director_brief. Call prepare_v2_context with stable request_id,
+   exact reader_text, kind=turn, participants=[]; defer story_plan and new
+   NPC proposals. Read the manifest phase. A committed duplicate returns
+   saved narration; never generate again.
+2. phase=collector: read every raw chunk in order and verify hashes. This
+   packet includes ALL existing cast cards and personal knowledge, recent
+   scenes, state, relationships, history milestones, hooks and scene_builder.
+   You are the collector, NOT the writer. Search earlier history if required.
+   Compile actual scene_context Markdown using all required headings and
+   POV + selected NPC dossiers, at most 36000 Unicode characters. Distinguish
+   facts, interpretations and optional opportunities. Select plausible
+   participants (include all current present/remote NPCs; candidate does NOT
+   mean actual witness). Propose new NPCs only if justified. Derive the final
+   story_plan, addressing every plan_priority_ids item.
+3. Call submit_v2_scene_context(session_id, expected_version, packet_id,
+   request_id, chunk_hashes, scene_context, participants, story_plan,
+   new_characters). No narration, no game mutations. Server stores temporary
+   system/scene_context.md and returns a NEW director packet. Exact retries
+   return the same director packet. The raw packet cannot be used for commit.
+4. phase=director: read every remaining chunk, including the last full
+   Skin Builder block. Now switch role to director/writer. Use the returned
+   compilation, exact reader input and full Skin Builder. Actual facts and
+   constraints bind the scene; optional opportunities are not foregone events.
+   If a necessary participant is outside selected cast, reprepare with the same
+   request_id/input and changed initial participants/proposals, then collect
+   again. Do not call prepare just to check readiness.
+5. Only after all_chunks_read=true in director phase, write narration, derive
+   actual changes and save_v2_turn using the NEW packet ID and hashes. Only
+   actual participants and witnessed events are committed. Review setting
+   retains its old semantics (disabled by default). Keep service material
+   private; never expose it as narration.
+6. If prepare returns reused_pending_packet=true, follow its current phase
+   and unread_chunk_indices. If already director, do not repeat collection.
+   If instruction versions/sources/mode change, prepare again with the same
+   request_id/input. Never reuse a previous turn's context or assumptions.
+
+With scene_context_enabled=false use the legacy single-packet procedure below.
+Audit, canon, rollback, technical evidence and transaction guarantees do not
+change. A role change in the same conversation does not clear the LLM context.
+
+
 This server handles only new NV2_ sessions. Use the existing Lite plugin for
 LITE_ sessions. Never migrate or rewrite Lite/CN_ games through this server.
 
