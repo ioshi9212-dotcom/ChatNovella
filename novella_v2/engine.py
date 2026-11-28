@@ -1046,6 +1046,9 @@ class Engine:
                 need(state["location"] != "НЕ ЗАДАНА", "OPENING_MISSING",
                      "Set opening scene before playing")
             pending = meta.get("packet")
+            if collect and pending and pending.get("version") == meta["version"] and pending.get("request_id") == request_id:
+                need(pending.get("reader_text") == reader_text, "REQUEST_REUSED",
+                     "Request id cannot be reused for different reader input")
             if (kind == "turn" and new_characters is None and pending
                     and pending.get("version") == meta["version"]
                     and pending.get("request_id") == request_id
@@ -1330,8 +1333,8 @@ class Engine:
              "PACKET_INCOMPLETE", "Read and verify all 36000-character chunks")
         return p
 
-    @staticmethod
-    def _check_scene_context(text: str, participants: set[str]) -> None:
+    def _check_scene_context(self, path: Path, text: str, participants: set[str],
+                             proposals: dict[str, dict]) -> None:
         """Check transport shape, never pretend that prose headings prove understanding."""
         need(isinstance(text, str) and 0 < len(text) <= CHUNK_SIZE and bool(text.strip()),
              "SCENE_CONTEXT_SIZE", "Scene context must contain 1–36000 Unicode characters")
@@ -1353,8 +1356,31 @@ class Engine:
              "SCENE_CONTEXT_ACTORS", "Supply one dossier for POV and every selected NPC")
         for i, heading in enumerate(actors):
             end = actors[i + 1].start() if i + 1 < len(actors) else len(bodies["Персонажи"])
-            need(bool(bodies["Персонажи"][heading.end():end].strip()),
-                 "SCENE_CONTEXT_ACTORS", "Character dossiers cannot be empty")
+            dossier = bodies["Персонажи"][heading.end():end].strip()
+            name = heading.group(1)
+            fields = ["Канон", "Цитата", "Внешность", "Знания", "Отношения",
+                      "Состояние", "Мотивы", "Поведение", "Границы"]
+            labels = list(re.finditer(
+                r"^(Канон|Цитата|Внешность|Знания|Отношения|Состояние|Мотивы|Поведение|Границы):[ \t]*",
+                dossier, flags=re.M))
+            need([label.group(1) for label in labels] == fields,
+                 "SCENE_CONTEXT_DOSSIER", f"{name}: supply all nine dossier fields in order")
+            values = {}
+            for j, label in enumerate(labels):
+                stop = labels[j + 1].start() if j + 1 < len(labels) else len(dossier)
+                value = dossier[label.end():stop].strip()
+                need(bool(value), "SCENE_CONTEXT_DOSSIER", f"{name}: empty dossier field")
+                values[label.group(1)] = value
+            # A literal excerpt demonstrates source access, not semantic correctness.
+            # Exclude the engine's generic card preamble from the author evidence.
+            card = path / "characters" / (name + ".md")
+            if name not in proposals and card.is_file():
+                author = card.read_bytes().decode("utf-8").removeprefix(CHARACTER_RULE)
+                if author.strip():
+                    quote = values["Цитата"]
+                    need(min(8, len(author.strip())) <= len(quote) <= 1200 and
+                         quote in author, "SCENE_CONTEXT_EVIDENCE",
+                         f"{name}: Цитата must be an exact fragment of the author card")
 
     def _check_context_sources(self, path: Path, packet: dict) -> None:
         need(packet.get("packet_stamp") == self._packet_stamp(path),
@@ -1370,6 +1396,12 @@ class Engine:
              "SKIN_VERSION_CHANGED", "Skin Builder changed; prepare fresh context")
         need(packet.get("scene_review_enabled") == self.scene_review_enabled,
              "REVIEW_MODE_CHANGED", "Prepare fresh context for the current review mode")
+        reminder_path = self.instructions / "author_reminder.md"
+        reminder = (reminder_path.read_bytes().decode("utf-8")
+                    if packet.get("author_reminder_sha256") is not None and reminder_path.is_file()
+                    else None)
+        need((digest(reminder) if reminder is not None else None) == packet.get("author_reminder_sha256"),
+             "RULES_VERSION_CHANGED", "Author reminder changed; prepare fresh context")
 
     def _director_gate(self, path: Path, packet: dict) -> None:
         need((packet.get("instructions_mode") == CONTEXT_MODE) == self.scene_context_enabled,
@@ -1424,7 +1456,7 @@ class Engine:
                  "Include the currently present/remote NPCs in the available cast")
             need(selected <= cast | set(proposals), "UNKNOWN_CHARACTER", "Unknown selected NPC")
             need(set(proposals) <= selected, "CHARACTER_PROPOSALS", "Every proposal must have a selected dossier")
-            self._check_scene_context(scene_context, selected)
+            self._check_scene_context(path, scene_context, selected, proposals)
             plan = story_hooks.validate_plan(story_plan, set(meta.get("director_valid_ids", [])),
                                              set(meta.get("director_priority_ids", [])))
             skin = self._read(self.instructions, "skin_builder.md")
