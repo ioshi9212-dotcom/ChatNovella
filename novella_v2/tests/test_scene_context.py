@@ -165,6 +165,22 @@ class TestSceneContext(unittest.TestCase):
         director = self.submit(raw, limit)
         self.assertEqual(self.read(director)["scene_context"]["chars"], CHUNK_SIZE)
 
+    def test_legacy_volume_heading_is_accepted_without_relaxing_required_sections(self):
+        raw = self.raw()
+        self.read(raw)
+        valid = compilation("adrian", "silas")
+        legacy = valid + "\n## Приоритет объёма\nСлужебная пометка.\n"
+        self.assert_code("SCENE_CONTEXT_SECTIONS", self.submit, raw,
+                         legacy.replace("## Ограничения\nНе передавать чужие знания.\n", ""))
+        self.assert_code("SCENE_CONTEXT_SECTIONS", self.submit, raw,
+                         legacy.replace("Не передавать чужие знания.\n", ""))
+        self.assert_code("SCENE_CONTEXT_SECTIONS", self.submit, raw,
+                         legacy.replace("## Приоритет объёма", "## Посторонний раздел"))
+        self.assert_code("SCENE_CONTEXT_SECTIONS", self.submit, raw,
+                         legacy.replace("## Предыстория", "## Пространство", 1))
+        director = self.submit(raw, legacy)
+        self.assertEqual(self.read(director)["scene_context"]["content"], legacy)
+
     def test_optional_new_character_stays_temporary(self):
         raw = self.raw()
         self.read(raw)
